@@ -45,6 +45,9 @@ class MarmotTableRecognitionDataset(Dataset):
     '''
 
     DPI = 96
+    TABLE_LABEL = 'Label="TableBody"'
+    BBOX_START = 'BBox="'
+    BBOX_END = '" CLIDs'
 
     def __init__(self, root, transforms=None):
         self.root = root
@@ -77,41 +80,40 @@ class MarmotTableRecognitionDataset(Dataset):
         xml_file = open(self.xml_files[index], "r")
         xml_content = xml_file.read()
 
-        # Find index of all occurrences of only needed portions (TableBody in this case)
+        # Find starting index of all the table occurrences
         portions_indexes = [
             l.start()
-            for l in re.finditer('Label="TableBody"', xml_content)
+            for l in re.finditer(self.TABLE_LABEL, xml_content)
         ]
 
+        # Extract coordinates for each table
         boxes = []
         for i in portions_indexes[:-1]:
-            coords = []
-            start = i
 
-            # Substring from whole file content
-            substr = xml_content[start:start + 400]
-
-            # Now find start index and end index of coordinates in this substring
-            start = substr.find('BBox="')
-            end = substr.find('" CLIDs')
-
-            # String containing only points
-            points = substr[start + 6:end]
+            # Extract string containing only points
+            sub_content = xml_content[i:]
+            start, end = (
+                sub_content.find(self.BBOX_START),
+                sub_content.find(self.BBOX_END)
+            )
+            points = sub_content[start + len(self.BBOX_START):end]
 
             # From little endian to "pounds" unit
-            bins = ''
-            for j in points.split(' '):
-                if(j == ''):
-                    continue
-                coords.append(struct.unpack('>d', binascii.unhexlify(j))[0])
+            coords = []
+            for coord in points.split(' '):
+                if not coord:
+                    break
+                coords.append(
+                    struct.unpack('>d', binascii.unhexlify(coord))[0]
+                )
 
             # Discard "wrong" bounding boxes
             if len(coords) != 4:
                 continue
 
             # From "pound" to inch to pixel values
-            for k in range(4):
-                coords[k] = (coords[k] / POUND_TO_INCH_FACTOR) * self.DPI
+            for c in range(len(coords)):
+                coords[c] = (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
 
             # Translate origin from bottom-left corner
             # to top-left corner of the image
@@ -119,6 +121,7 @@ class MarmotTableRecognitionDataset(Dataset):
             coords[1] = img_size[1] - coords[1]
             coords[3] = img_size[1] - coords[3]
 
+            # Add coordinates to the list of bounding boxes
             boxes.append(coords)
 
         return boxes
@@ -181,6 +184,10 @@ class ICDAR13TableRecognitionDataset(Dataset):
     '''
 
     DPI = 96
+    BOX_LABEL = 'bounding-box'
+    BOX_X1_LABEL, BOX_Y1_LABEL, BOX_X2_LABEL, BOX_Y2_LABEL = (
+        'x1', 'y1', 'x2', 'y2'
+    )
 
     def __init__(self, root, transforms=None):
         self.root = root
@@ -209,20 +216,25 @@ class ICDAR13TableRecognitionDataset(Dataset):
         Extract table bounding boxes from the XML
         associated with the given index
         '''
+        # Read the XML file associated with the given index
+        # and extract bounding boxes keys
         xml_content = minidom.parse(self.xml_files[index])
-        items = xml_content.getElementsByTagName('bounding-box')
-        coordinates = []
+        items = xml_content.getElementsByTagName(BOX_LABEL)
+
+        # Extract coordinates for each bounding box
+        boxes = []
         for item in items:
+
             # Extract the bounding box coordinates
-            x1 = float(item.attributes['x1'].value)
-            y1 = float(item.attributes['y1'].value)
-            x2 = float(item.attributes['x2'].value)
-            y2 = float(item.attributes['y2'].value)
+            x1 = float(item.attributes[self.BOX_X1_LABEL].value)
+            y1 = float(item.attributes[self.BOX_Y1_LABEL].value)
+            x2 = float(item.attributes[self.BOX_X2_LABEL].value)
+            y2 = float(item.attributes[self.BOX_Y2_LABEL].value)
             coords = [x1, y1, x2, y2]
 
             # From "pound" to inch to pixel values
-            for k in range(4):
-                coords[k] = (coords[k] / POUND_TO_INCH_FACTOR) * self.DPI
+            for c in range(len(coords)):
+                coords[c] = (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
 
             # Translate origin from bottom-left corner
             # to top-left corner of the image
@@ -230,9 +242,10 @@ class ICDAR13TableRecognitionDataset(Dataset):
             coords[1] = img_size[1] - coords[1]
             coords[3] = img_size[1] - coords[3]
 
-            coordinates.append(coords)
+            # Add coordinates to the list of bounding boxes
+            boxes.append(coords)
 
-        return coordinates
+        return boxes
 
     def show_image(self, index):
         '''
@@ -290,11 +303,11 @@ marmot = MarmotTableRecognitionDataset(
 
 
 )
-# marmot.show_labeled_image(2)
-# print(marmot[2])
+marmot.show_labeled_image(2)
+print(marmot[2])
 
-icdar = ICDAR13TableRecognitionDataset(
-    root="datasets/icdar13/eu-dataset"
-)
-icdar.show_labeled_image(31)
+# icdar = ICDAR13TableRecognitionDataset(
+#    root="datasets/icdar13/eu-dataset"
+# )
+# icdar.show_labeled_image(31)
 # print(icdar[31])
