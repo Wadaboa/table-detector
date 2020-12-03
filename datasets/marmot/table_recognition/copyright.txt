@@ -1,0 +1,8 @@
+Ground-truthed Dataset & Table Detection Evaluator
+--------------------------------------------------
+
+Copyright (c) 2011 by Institute of Computer Science and Techonology of Peking University and Institute of Digital Publishing of Founder R&D Center, China.
+
+Permission is granted, free of charge, to any person or group obtaining a copy of the dataset and evaluator source code with research motivation only, including without limitation the rights to use, copy, modify, and distribute all the files.
+
+Any commercial use must be permited by Founder Apabi, please contact SACSupport@founder.com.cn for details. 

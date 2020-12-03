@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="basic_data_type_20110928.xsd"/>
+
+  <xs:simpleType name="Label">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Char"/>
+      <xs:enumeration value="Image"/>
+      <xs:enumeration value="Path"/>
+      <xs:enumeration value="Matrix"/>
+      <xs:enumeration value="Formula"/>
+      <xs:enumeration value="Figure"/>
+      <xs:enumeration value="Textline"/>
+      <xs:enumeration value="List"/>
+      <xs:enumeration value="TableCaption"/>
+      <xs:enumeration value="TableFootnote"/>
+      <xs:enumeration value="TableBody"/>
+      <xs:enumeration value="Table"/>
+      <xs:enumeration value="Paragraph"/>
+      <xs:enumeration value="Footnote"/>
+      <xs:enumeration value="Body"/>      
+      <xs:enumeration value="Header"/>
+      <xs:enumeration value="Footer"/>
+      <xs:enumeration value="Decoration"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="Content" abstract="true" mixed="true">
+    <xs:attribute name="Label" type="Label" use="required"/>
+    <xs:attribute name="BBox" type="Box" use="required"/>
+    <xs:attribute name="LID" type="LayoutID" use="required"/>
+    <xs:attribute name="PLID" type="LayoutID" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Leaf">
+    <xs:complexContent mixed="true">
+      <xs:extension base="Content">
+	<xs:attribute name="PID" type="PhysicalID" use="required"/>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="Composite">
+    <xs:complexContent>
+      <xs:extension base="Content">
+	<xs:attribute name="CLIDs" type="IDArray" use="required">
+	</xs:attribute>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="Leafs">
+    <xs:choice>
+      <xs:element name="Leaf" type="Leaf" maxOccurs="unbounded"/>
+    </xs:choice>
+    <xs:attribute name="Label" type="Label"/>
+  </xs:complexType>
+
+  <xs:complexType name="Composites">
+    <xs:choice>
+      <xs:element name="Composite" type="Composite" maxOccurs="unbounded"/>
+    </xs:choice>
+    <xs:attribute name="Label" type="Label"/>
+  </xs:complexType>
+
+  <xs:complexType name="Contents">
+    <xs:sequence maxOccurs="unbounded">
+      <xs:choice>
+	<xs:element name="Leafs" type="Leafs" maxOccurs="unbounded"/>
+	<xs:element name="Composites" type="Composites" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="Page">
+    <xs:sequence>
+      <xs:element name="Contents" type="Contents"/>
+    </xs:sequence>
+    <xs:attribute name="PageNum" type="xs:positiveInteger" use="required"/>
+    <xs:attribute name="PageType" type="xs:positiveInteger" use="required"/>
+    <xs:attribute name="CropBox" type="Box" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="Page" type="Page"/>
+
+</xs:schema>

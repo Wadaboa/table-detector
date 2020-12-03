@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="basic_data_type_20110928.xsd"/>
+
+  <xs:simpleType name="Label">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Char"/>
+      <xs:enumeration value="Image"/>
+      <xs:enumeration value="Path"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="PathOP">
+    <xs:attribute name="OpType" type="xs:nonNegativeInteger" use="required"/>
+    <xs:attribute name="Operand0" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand1" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand2" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand3" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand4" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand5" type="HexDouble" use="required"/>
+    <xs:attribute name="Operand6" type="HexDouble" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Leaf" mixed="true">
+    <xs:sequence minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="PathOP" type="PathOP"/>
+    </xs:sequence>
+    <xs:attribute name="Label" type="Label" use="required"/>
+    <xs:attribute name="PID" type="PhysicalID" use="required"/>
+    <xs:attribute name="BBox" type="Box" use="required"/>
+    <xs:attribute name="ClipBox" type="Box"/>
+    <xs:attribute name="Text" type="xs:string"/>
+    <xs:attribute name="Font" type="xs:nonNegativeInteger"/>
+    <xs:attribute name="Size" type="HexDouble"/>
+  </xs:complexType>
+
+  <xs:complexType name="Page">
+    <xs:sequence maxOccurs="unbounded">
+      <xs:element name="Leaf" type="Leaf"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Page" type="Page"/>
+
+</xs:schema>
