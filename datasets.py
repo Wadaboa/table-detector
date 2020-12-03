@@ -1,8 +1,19 @@
+'''
+When referring to x1, y1, x2, y2 in this module we mean to
+represent a bounding box like the following:
+x1,y1 ------
+|          |
+|          |
+|          |
+--------x2,y2
+'''
+
 import glob
 import struct
 import binascii
 import re
 import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from xml.dom import minidom
 
@@ -37,6 +48,16 @@ def get_image_size(img):
     return None
 
 
+def box_to_mask(img, box):
+    '''
+    Convert a bounding box to a mask image,
+    where the box is a list or tuple like (x1, y1, x2, y2)
+    '''
+    mask = np.zeros(img.shape, np.dtype('uint8'))
+    mask[box[1]:box[3], box[0]:box[2], :] = 255
+    return mask
+
+
 class MarmotTableRecognitionDataset(Dataset):
     '''
     Marmot dataset for table recognition.
@@ -52,7 +73,9 @@ class MarmotTableRecognitionDataset(Dataset):
     def __init__(self, root, transforms=None):
         self.root = root
         self.transforms = transforms
-        self.xml_files = glob.glob(os.path.join(self.root, "labeled", "*.xml"))
+        self.xml_files = sorted(
+            glob.glob(os.path.join(self.root, "labeled", "*.xml"))
+        )
         self.image_files = [
             os.path.join(self.root, "raw", f"{Path(f).stem}.bmp")
             for f in self.xml_files
@@ -113,7 +136,9 @@ class MarmotTableRecognitionDataset(Dataset):
 
             # From "pound" to inch to pixel values
             for c in range(len(coords)):
-                coords[c] = (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
+                coords[c] = int(
+                    (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
+                )
 
             # Translate origin from bottom-left corner
             # to top-left corner of the image
@@ -144,8 +169,8 @@ class MarmotTableRecognitionDataset(Dataset):
         for box in boxes:
             cv2.rectangle(
                 img,
-                (int(box[0]), int(box[1])),
-                (int(box[2]), int(box[3])),
+                (box[0], box[1]),
+                (box[2], box[3]),
                 (255, 0, 0), 2
             )
         cv2.imshow(f"Marmot dataset ~ Labeled image #{index}", img)
@@ -154,24 +179,29 @@ class MarmotTableRecognitionDataset(Dataset):
     def __getitem__(self, index):
         img = self.get_image(index)
         boxes = self.find_tables(index)
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
-        labels = torch.ones((len(boxes),), dtype=torch.int64)
-        image_id = torch.tensor([index])
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-        iscrowd = torch.zeros((len(boxes),), dtype=torch.int64)
+        t_boxes = torch.tensor(boxes, dtype=torch.float32)
+
+        masks = []
+        cv_img = pil_to_opencv(img)
+        for box in boxes:
+            mask = box_to_mask(cv_img, box)
+            masks.append(mask)
 
         target = {}
         target["boxes"] = boxes
-        target["labels"] = labels
-        target["masks"] = None
-        target["image_id"] = image_id
-        target["area"] = area
-        target["iscrowd"] = iscrowd
+        target["labels"] = torch.ones((len(boxes),), dtype=torch.int64)
+        target["masks"] = torch.tensor(masks, dtype=torch.int64)
+        target["image_id"] = torch.tensor([index])
+        target["area"] = (
+            (t_boxes[:, 3] - t_boxes[:, 1]) *
+            (t_boxes[:, 2] - t_boxes[:, 0])
+        )
+        target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
 
         if self.transforms is not None:
             img, target = self.transforms(img, target)
 
-        return img, target
+        return [(img, target)]
 
     def __len__(self):
         return len(self.image_files)
@@ -184,6 +214,9 @@ class ICDAR13TableRecognitionDataset(Dataset):
     '''
 
     DPI = 96
+    TABLE_LABEL = 'table'
+    REGION_LABEL = 'region'
+    PAGE_LABEL = 'page'
     BOX_LABEL = 'bounding-box'
     BOX_X1_LABEL, BOX_Y1_LABEL, BOX_X2_LABEL, BOX_Y2_LABEL = (
         'x1', 'y1', 'x2', 'y2'
@@ -192,22 +225,24 @@ class ICDAR13TableRecognitionDataset(Dataset):
     def __init__(self, root, transforms=None):
         self.root = root
         self.transforms = transforms
-        self.xml_files = glob.glob(os.path.join(self.root, "*-reg.xml"))
+        self.xml_files = sorted(
+            glob.glob(os.path.join(self.root, "*-reg.xml"))
+        )
         self.image_files = [
             os.path.join(self.root, f"{Path(f).stem.replace('-reg', '')}.pdf")
             for f in self.xml_files
         ]
         self.images = dict()
 
-    def get_image(self, index):
+    def get_images(self, index):
         '''
-        Return the image associated with the given index
-        (load it from the pdf file if not already loaded)
+        Return the images associated with the given index
+        (load the pages from the pdf file if not already loaded)
         '''
         if index not in self.images:
             self.images[index] = convert_from_path(
                 self.image_files[index], dpi=self.DPI
-            )[0]
+            )
 
         return self.images[index]
 
@@ -218,81 +253,113 @@ class ICDAR13TableRecognitionDataset(Dataset):
         '''
         # Read the XML file associated with the given index
         # and extract bounding boxes keys
-        xml_content = minidom.parse(self.xml_files[index])
-        items = xml_content.getElementsByTagName(BOX_LABEL)
+        xml_content = ET.parse(self.xml_files[index])
+        xml_root = xml_content.getroot()
+        boxes = dict()
 
-        # Extract coordinates for each bounding box
-        boxes = []
-        for item in items:
+        # Iterate over tables
+        imgs = self.get_images(index)
+        for table in xml_root.findall(self.TABLE_LABEL):
+            # A table could span multiple pages
+            # (so it could have multiple regions)
+            for region in table.findall(self.REGION_LABEL):
+                page = region.get(self.PAGE_LABEL)
+                box = region.find(self.BOX_LABEL)
 
-            # Extract the bounding box coordinates
-            x1 = float(item.attributes[self.BOX_X1_LABEL].value)
-            y1 = float(item.attributes[self.BOX_Y1_LABEL].value)
-            x2 = float(item.attributes[self.BOX_X2_LABEL].value)
-            y2 = float(item.attributes[self.BOX_Y2_LABEL].value)
-            coords = [x1, y1, x2, y2]
+                # Extract the bounding box coordinates
+                x1 = float(box.get(self.BOX_X1_LABEL))
+                y1 = float(box.get(self.BOX_Y1_LABEL))
+                x2 = float(box.get(self.BOX_X2_LABEL))
+                y2 = float(box.get(self.BOX_Y2_LABEL))
+                coords = [x1, y1, x2, y2]
 
-            # From "pound" to inch to pixel values
-            for c in range(len(coords)):
-                coords[c] = (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
+                # From "pound" to inch to pixel values
+                for c in range(len(coords)):
+                    coords[c] = int(
+                        (coords[c] / POUND_TO_INCH_FACTOR) * self.DPI
+                    )
 
-            # Translate origin from bottom-left corner
-            # to top-left corner of the image
-            img_size = get_image_size(self.get_image(index))
-            coords[1] = img_size[1] - coords[1]
-            coords[3] = img_size[1] - coords[3]
+                # Translate origin from bottom-left corner
+                # to top-left corner of the image
+                img_size = get_image_size(imgs[int(page) - 1])
+                coords[1] = img_size[1] - coords[1]
+                coords[3] = img_size[1] - coords[3]
+                coords[1], coords[3] = coords[3], coords[1]
 
             # Add coordinates to the list of bounding boxes
-            boxes.append(coords)
+            boxes.setdefault(int(page) - 1, []).append(coords)
 
         return boxes
 
-    def show_image(self, index):
+    def show_images(self, index):
         '''
-        Open a window to show the image at the given index
+        Open a window to show all the pages of the PDF file
+        at the given index
         '''
-        img = pil_to_opencv(self.get_image(index))
-        cv2.imshow(f"ICDAR 2013 dataset ~ Image #{index}", img)
-        cv2.waitKey(0)
-
-    def show_labeled_image(self, index):
-        '''
-        Open a window to show the image at the given index,
-        alogn with the associated labels
-        '''
-        img = pil_to_opencv(self.get_image(index))
-        boxes = self.find_tables(index)
-        for box in boxes:
-            cv2.rectangle(
-                img,
-                (int(box[0]), int(box[1])),
-                (int(box[2]), int(box[3])),
-                (255, 0, 0), 2
+        imgs = self.get_images(index)
+        for i, img in enumerate(images):
+            cv2.imshow(
+                f"ICDAR 2013 dataset ~ Image #{index}, page #{i}",
+                pil_to_opencv(img)
             )
-        cv2.imshow(f"ICDAR 2013 dataset ~ Labeled image #{index}", img)
-        cv2.waitKey(0)
+            cv2.waitKey(0)
+
+    def show_labeled_images(self, index):
+        '''
+        Open a window to show all the pages of the PDF file
+        at the given index, along with the associated labels
+        '''
+        imgs = self.get_images(index)
+        boxes = self.find_tables(index)
+        for page, boxes_in_page in boxes.items():
+            img = pil_to_opencv(imgs[page])
+            for box in boxes_in_page:
+                cv2.rectangle(
+                    img,
+                    (box[0], box[1]),
+                    (box[2], box[3]),
+                    (255, 0, 0), 2
+                )
+            cv2.imshow(
+                f"ICDAR 2013 dataset ~ Labeled image #{index}, page #{page}", img
+            )
+            cv2.waitKey(0)
 
     def __getitem__(self, index):
-        img = self.get_image(index)
+        imgs = self.get_images(index)
         boxes = self.find_tables(index)
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
-        labels = torch.ones((len(boxes),), dtype=torch.int64)
-        image_id = torch.tensor([index])
-        area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-        iscrowd = torch.zeros((len(boxes),), dtype=torch.int64)
+        res = []
+        for page, boxes_in_page in boxes.items():
+            img = imgs[page]
+            t_boxes = torch.tensor(boxes_in_page, dtype=torch.float32)
 
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["masks"] = None
-        target["image_id"] = image_id
-        target["area"] = area
-        target["iscrowd"] = iscrowd
+            masks = []
+            cv_img = pil_to_opencv(img)
+            for box in boxes_in_page:
+                mask = box_to_mask(cv_img, box)
+                masks.append(mask)
 
-        if self.transforms is not None:
-            img, target = self.transforms(img, target)
+            target = {}
+            target["boxes"] = t_boxes
+            target["labels"] = torch.ones(
+                (len(boxes_in_page),), dtype=torch.int64
+            )
+            target["masks"] = torch.tensor(masks, dtype=torch.int64)
+            target["image_id"] = torch.tensor([index])
+            target["area"] = (
+                abs(t_boxes[:, 3] - t_boxes[:, 1]) *
+                abs(t_boxes[:, 2] - t_boxes[:, 0])
+            )
+            target["iscrowd"] = torch.zeros(
+                (len(boxes_in_page),), dtype=torch.int64
+            )
 
-        return img, target
+            if self.transforms is not None:
+                img, target = self.transforms(img, target)
+
+            res.append((img, target))
+
+        return res
 
     def __len__(self):
         return len(self.image_files)
@@ -300,14 +367,13 @@ class ICDAR13TableRecognitionDataset(Dataset):
 
 marmot = MarmotTableRecognitionDataset(
     root="datasets/marmot/table_recognition/data/english/positive"
-
-
 )
-marmot.show_labeled_image(2)
+# marmot.show_labeled_image(2)
 print(marmot[2])
 
-# icdar = ICDAR13TableRecognitionDataset(
-#    root="datasets/icdar13/eu-dataset"
-# )
-# icdar.show_labeled_image(31)
-# print(icdar[31])
+icdar = ICDAR13TableRecognitionDataset(
+    root="datasets/icdar13/eu-dataset"
+)
+# for i in range(34):
+# icdar.show_labeled_images(29)
+# print(icdar[29])
