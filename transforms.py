@@ -1,3 +1,11 @@
+'''
+Define some PyTorch transformations to be applied on document images
+(some of them assume a white background and black text)
+
+See https://github.com/AyanGadpal/Document-Image-Augmentation
+'''
+
+
 import cv2
 import torch
 import torch.nn as nn
@@ -8,6 +16,10 @@ import utils
 
 
 class DocumentBrightnessTransform(nn.Module):
+    '''
+    Change the brightness of the given image,
+    based on the magnitude and sign of the `alpha` value
+    '''
 
     def __init__(self, alpha):
         super().__init__()
@@ -26,6 +38,10 @@ class DocumentBrightnessTransform(nn.Module):
 
 
 class DocumentDilationTransform(nn.Module):
+    '''
+    Apply a simple dilation morphological operation,
+    so as to obtain thicker characters in text
+    '''
 
     def __init__(self, kernel, pixel_range):
         super().__init__()
@@ -51,6 +67,10 @@ class DocumentDilationTransform(nn.Module):
 
 
 class DocumentBackgroundColorTranform(nn.Module):
+    '''
+    Change the background color of the given document image,
+    assuming a white background
+    '''
 
     def __init__(self, color):
         super().__init__()
@@ -76,6 +96,12 @@ class DocumentBackgroundColorTranform(nn.Module):
 
 
 class DocumentSmudgeTransform(nn.Module):
+    '''
+    In the smudge transform, we transform the original image to
+    spread the black pixel regions and make it look like a kind
+    of smeary blurred black pixel region
+    (See https://arxiv.org/pdf/2004.12629.pdf)
+    '''
 
     def __init__(self, pixel_range):
         super().__init__()
