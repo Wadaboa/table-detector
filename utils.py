@@ -2,6 +2,7 @@ import random
 
 import numpy as np
 import torch
+import PIL
 
 
 def deterministic_torch():
@@ -28,3 +29,16 @@ def fix_random(seed):
     random.seed(seed)
     np.random.seed(seed)
     deterministic_torch()
+
+
+def to_numpy(img):
+    '''
+    Convert the given image to the numpy format
+    '''
+    if isinstance(img, np.ndarray):
+        return img
+    if isinstance(img, torch.Tensor):
+        return img.detach().cpu().numpy()
+    if isinstance(img, PIL.Image.Image):
+        return np.asarray(img).copy()
+    return None

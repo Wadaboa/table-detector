@@ -25,16 +25,11 @@ from PIL import Image
 from torch.utils.data import Dataset
 from pdf2image import convert_from_path
 
+import utils
+import transforms
+
 
 POUND_TO_INCH_FACTOR = 72
-
-
-def pil_to_opencv(img):
-    '''
-    Convert the given RGB PIL image to the OpenCV format
-    '''
-    img = np.asarray(img)
-    return img[:, :, ::-1].copy()
 
 
 def get_image_size(img):
@@ -151,20 +146,26 @@ class MarmotTableRecognitionDataset(Dataset):
 
         return boxes
 
-    def show_image(self, index):
+    def show_image(self, index, original=False):
         '''
         Open a window to show the image at the given index
         '''
-        img = pil_to_opencv(self.get_image(index))
+        img = self.get_image(index)
+        if self.transforms is not None and not original:
+            img = self.transforms(img)
+        img = utils.to_numpy(img)
         cv2.imshow(f"Marmot dataset ~ Image #{index}", img)
         cv2.waitKey(0)
 
-    def show_labeled_image(self, index):
+    def show_labeled_image(self, index, original=False):
         '''
         Open a window to show the image at the given index,
-        alogn with the associated labels
+        along with the associated labels
         '''
-        img = pil_to_opencv(self.get_image(index))
+        img = self.get_image(index)
+        if self.transforms is not None and not original:
+            img = self.transforms(img)
+        img = utils.to_numpy(img)
         boxes = self.find_tables(index)
         for box in boxes:
             cv2.rectangle(
@@ -182,7 +183,7 @@ class MarmotTableRecognitionDataset(Dataset):
         t_boxes = torch.tensor(boxes, dtype=torch.float32)
 
         masks = []
-        cv_img = pil_to_opencv(img)
+        cv_img = utils.to_numpy(img)
         for box in boxes:
             mask = box_to_mask(cv_img, box)
             masks.append(mask)
@@ -199,7 +200,8 @@ class MarmotTableRecognitionDataset(Dataset):
         target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
 
         if self.transforms is not None:
-            img, target = self.transforms(img, target)
+            #img, target = self.transforms(img, target)
+            img = self.transforms(img)
 
         return [(img, target)]
 
@@ -286,25 +288,29 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 coords[3] = img_size[1] - coords[3]
                 coords[1], coords[3] = coords[3], coords[1]
 
-            # Add coordinates to the list of bounding boxes
-            boxes.setdefault(int(page) - 1, []).append(coords)
+                # Add coordinates to the list of bounding boxes
+                boxes.setdefault(int(page) - 1, []).append(coords)
 
         return boxes
 
-    def show_images(self, index):
+    def show_images(self, index, original=False):
         '''
         Open a window to show all the pages of the PDF file
         at the given index
         '''
         imgs = self.get_images(index)
-        for i, img in enumerate(images):
+        for i, img in enumerate(imgs):
+            actual_img = img.copy()
+            if self.transforms is not None and not original:
+                actual_img = self.transforms(actual_img)
+            actual_img = utils.to_numpy(actual_img)
             cv2.imshow(
                 f"ICDAR 2013 dataset ~ Image #{index}, page #{i}",
-                pil_to_opencv(img)
+                utils.to_numpy(actual_img)
             )
             cv2.waitKey(0)
 
-    def show_labeled_images(self, index):
+    def show_labeled_images(self, index, original=False):
         '''
         Open a window to show all the pages of the PDF file
         at the given index, along with the associated labels
@@ -312,16 +318,20 @@ class ICDAR13TableRecognitionDataset(Dataset):
         imgs = self.get_images(index)
         boxes = self.find_tables(index)
         for page, boxes_in_page in boxes.items():
-            img = pil_to_opencv(imgs[page])
+            actual_img = imgs[page].copy()
+            if self.transforms is not None and not original:
+                actual_img = self.transforms(actual_img)
+            actual_img = utils.to_numpy(actual_img)
             for box in boxes_in_page:
                 cv2.rectangle(
-                    img,
+                    actual_img,
                     (box[0], box[1]),
                     (box[2], box[3]),
                     (255, 0, 0), 2
                 )
             cv2.imshow(
-                f"ICDAR 2013 dataset ~ Labeled image #{index}, page #{page}", img
+                f"ICDAR 2013 dataset ~ Labeled image #{index}, page #{page}",
+                actual_img
             )
             cv2.waitKey(0)
 
@@ -334,7 +344,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
             t_boxes = torch.tensor(boxes_in_page, dtype=torch.float32)
 
             masks = []
-            cv_img = pil_to_opencv(img)
+            cv_img = utils.to_numpy(img)
             for box in boxes_in_page:
                 mask = box_to_mask(cv_img, box)
                 masks.append(mask)
@@ -366,14 +376,20 @@ class ICDAR13TableRecognitionDataset(Dataset):
 
 
 marmot = MarmotTableRecognitionDataset(
-    root="datasets/marmot/table_recognition/data/english/positive"
+    root="datasets/marmot/table_recognition/data/english/positive",
+    transforms=transforms.DocumentBackgroundColorTranform(
+        color=[148, 236, 255])
 )
+# for i in range(len(marmot)):
+#    marmot.show_labeled_image(i)
 # marmot.show_labeled_image(2)
-print(marmot[2])
+# print(marmot[2])
 
 icdar = ICDAR13TableRecognitionDataset(
-    root="datasets/icdar13/eu-dataset"
+    root="datasets/icdar13/eu-dataset",
+    transforms=transforms.DocumentDilationTransform(
+        kernel=np.ones((2, 2)), pixel_range=(220, 255))
 )
-# for i in range(34):
-# icdar.show_labeled_images(29)
+for i in range(len(icdar)):
+    icdar.show_labeled_images(i)
 # print(icdar[29])
