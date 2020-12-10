@@ -10,6 +10,7 @@ from datasets import DATASETS
 
 
 NUM_CLASSES = 2
+DUMMY_SIZE = 10
 OPTIMIZERS = {
     'adam': torch.optim.Adam,
     'rmsprop': torch.optim.RMSprop,
@@ -30,6 +31,8 @@ def get_dataset(params):
     dataset = DATASETS[dataset_type](
         roots=params.datasets.__dict__[dataset_type].path
     )
+    if params.dummy:
+        dataset = torch.utils.data.Subset(dataset, list(range(DUMMY_SIZE)))
     train_size = int(params.train_split * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(
@@ -55,15 +58,15 @@ def train(params):
     # Define data loaders
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_sampler=train_batch_sampler,
-        num_workers=params.workers, collate_fn=utils.collate_fn
+        num_workers=params.workers, collate_fn=learning_utils.collate_fn
     )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset, batch_size=1, sampler=test_sampler,
-        num_workers=params.workers, collate_fn=utils.collate_fn
+        num_workers=params.workers, collate_fn=learning_utils.collate_fn
     )
 
     # Get the backbone
-    backbone = backbones.get_backbone(params, NUM_CLASSES, pretrained=True)
+    backbone = backbones.get_backbone(params)
 
     # Get the object detector
     assert params.model in torchvision.models.detection.__dict__

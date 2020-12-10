@@ -1,4 +1,7 @@
 '''
+This module contains the implementation of various table detection
+and structure recognition datasets, by leveraging PyTorch Dataset objects
+
 When referring to x1, y1, x2, y2 in this module we mean to
 represent a bounding box like the following:
 x1,y1 ------

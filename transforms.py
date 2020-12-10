@@ -1,6 +1,6 @@
 '''
-Define some PyTorch transformations to be applied on document images
-(some of them assume a white background and black text)
+This module defines some PyTorch transformations to be applied on 
+document images (some of them assume black text on a white background)
 
 See https://github.com/AyanGadpal/Document-Image-Augmentation
 '''
