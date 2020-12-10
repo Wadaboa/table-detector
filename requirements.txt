@@ -4,3 +4,4 @@ torch==1.7.0
 torchvision==0.8.1
 pillow==8.0.1
 pdf2image==1.14.0
+pyyaml==5.3.1

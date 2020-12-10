@@ -189,3 +189,35 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
+
+
+def collate_fn(batch):
+    return tuple(zip(*batch))
+
+
+class Struct:
+    '''
+    Struct class, s.t. a nested dictionary is transformed
+    into a nested object
+    '''
+
+    def __init__(self, **entries):
+        for k, v in entries.items():
+            if isinstance(v, dict):
+                self.__dict__.update({k: Struct(**v)})
+            else:
+                self.__dict__.update({k: v})
+
+    def get_true_key(self):
+        '''
+        Return the only key in the Struct s.t. its value is True
+        '''
+        true_types = [k for k, v in self.__dict__.items() if v == True]
+        assert len(true_types) == 1
+        return true_types[0]
+
+    def __str__(self):
+        return str(self.__dict__)
+
+    def __repr__(self):
+        return str(self.__dict__)

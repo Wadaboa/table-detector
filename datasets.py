@@ -15,7 +15,6 @@ import re
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from xml.dom import minidom
 
 import cv2
 import torch
@@ -26,7 +25,6 @@ from torch.utils.data import Dataset
 from pdf2image import convert_from_path
 
 import utils
-import transforms
 
 
 POUND_TO_INCH_FACTOR = 72
@@ -65,16 +63,22 @@ class MarmotTableRecognitionDataset(Dataset):
     BBOX_START = 'BBox="'
     BBOX_END = '" CLIDs'
 
-    def __init__(self, root, transforms=None):
-        self.root = root
+    def __init__(self, roots, transforms=None):
+        if not isinstance(roots, list):
+            roots = [roots]
+        self.xml_files = []
+        self.image_files = []
+        for root in roots:
+            assert isinstance(root, str)
+            assert os.path.exists(os.path.abspath(root))
+            xml_files = glob.glob(os.path.join(root, "labeled", "*.xml"))
+            self.xml_files.extend(xml_files)
+            for xml_file in xml_files:
+                image_file = os.path.join(
+                    root, "raw", f"{Path(xml_file).stem}.bmp"
+                )
+                self.image_files.append(image_file)
         self.transforms = transforms
-        self.xml_files = sorted(
-            glob.glob(os.path.join(self.root, "labeled", "*.xml"))
-        )
-        self.image_files = [
-            os.path.join(self.root, "raw", f"{Path(f).stem}.bmp")
-            for f in self.xml_files
-        ]
         self.images = dict()
 
     def get_image(self, index):
@@ -106,7 +110,7 @@ class MarmotTableRecognitionDataset(Dataset):
 
         # Extract coordinates for each table
         boxes = []
-        for i in portions_indexes[:-1]:
+        for i in portions_indexes[: -1]:
 
             # Extract string containing only points
             sub_content = xml_content[i:]
@@ -114,7 +118,7 @@ class MarmotTableRecognitionDataset(Dataset):
                 sub_content.find(self.BBOX_START),
                 sub_content.find(self.BBOX_END)
             )
-            points = sub_content[start + len(self.BBOX_START):end]
+            points = sub_content[start + len(self.BBOX_START): end]
 
             # From little endian to "pounds" unit
             coords = []
@@ -200,7 +204,7 @@ class MarmotTableRecognitionDataset(Dataset):
         target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
 
         if self.transforms is not None:
-            #img, target = self.transforms(img, target)
+            # img, target = self.transforms(img, target)
             img = self.transforms(img)
 
         return [(img, target)]
@@ -224,16 +228,23 @@ class ICDAR13TableRecognitionDataset(Dataset):
         'x1', 'y1', 'x2', 'y2'
     )
 
-    def __init__(self, root, transforms=None):
-        self.root = root
+    def __init__(self, roots, transforms=None):
+        if not isinstance(roots, list):
+            roots = [roots]
+        self.xml_files = []
+        self.image_files = []
+        for root in roots:
+            assert isinstance(root, str)
+            assert os.path.exists(os.path.abspath(root))
+            xml_files = glob.glob(os.path.join(root, "*-reg.xml"))
+            self.xml_files.extend(xml_files)
+            for xml_file in xml_files:
+                image_file = os.path.join(
+                    root, f"{Path(xml_file).stem.replace('-reg', '')}.pdf"
+                )
+                self.image_files.append(image_file)
+
         self.transforms = transforms
-        self.xml_files = sorted(
-            glob.glob(os.path.join(self.root, "*-reg.xml"))
-        )
-        self.image_files = [
-            os.path.join(self.root, f"{Path(f).stem.replace('-reg', '')}.pdf")
-            for f in self.xml_files
-        ]
         self.images = dict()
 
     def get_images(self, index):
@@ -375,21 +386,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
         return len(self.image_files)
 
 
-marmot = MarmotTableRecognitionDataset(
-    root="datasets/marmot/table_recognition/data/english/positive",
-    transforms=transforms.DocumentBackgroundColorTranform(
-        color=[148, 236, 255])
-)
-# for i in range(len(marmot)):
-#    marmot.show_labeled_image(i)
-# marmot.show_labeled_image(2)
-# print(marmot[2])
-
-icdar = ICDAR13TableRecognitionDataset(
-    root="datasets/icdar13/eu-dataset",
-    transforms=transforms.DocumentDilationTransform(
-        kernel=np.ones((2, 2)), pixel_range=(220, 255))
-)
-for i in range(len(icdar)):
-    icdar.show_labeled_images(i)
-# print(icdar[29])
+DATASETS = {
+    'marmot': MarmotTableRecognitionDataset,
+    'icdar13': ICDAR13TableRecognitionDataset
+}
