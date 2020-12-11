@@ -4,13 +4,12 @@ import yaml
 
 import learning_utils
 import transforms
-import backbones
+import detectors
 import utils
 from datasets import DATASETS
 
 
 NUM_CLASSES = 2
-DUMMY_SIZE = 10
 OPTIMIZERS = {
     'adam': torch.optim.Adam,
     'rmsprop': torch.optim.RMSprop,
@@ -31,8 +30,10 @@ def get_dataset(params):
     dataset = DATASETS[dataset_type](
         roots=params.datasets.__dict__[dataset_type].path
     )
-    if params.dummy:
-        dataset = torch.utils.data.Subset(dataset, list(range(DUMMY_SIZE)))
+    if params.dummy.enabled:
+        dataset = torch.utils.data.Subset(
+            dataset, list(range(params.dummy.size))
+        )
     train_size = int(params.train_split * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(
@@ -45,6 +46,9 @@ def train(params):
     '''
     Train a model with the specified parameters
     '''
+    # Fix the random seed
+    utils.fix_random(params.random_seed)
+
     # Define datasets
     train_dataset, test_dataset = get_dataset(params)
 
@@ -65,22 +69,16 @@ def train(params):
         num_workers=params.workers, collate_fn=learning_utils.collate_fn
     )
 
-    # Get the backbone
-    backbone = backbones.get_backbone(params)
-
     # Get the object detector
-    assert params.model in torchvision.models.detection.__dict__
-    model = torchvision.models.detection.__dict__[params.model](
-        backbone=backbone,
-        num_classes=NUM_CLASSES
-    )
-    model.to(params.device)
+    detector = detectors.get_detector(params, NUM_CLASSES)
+    detector.to(params.device)
 
     # Define the optimizer
-    model_params = [p for p in model.parameters() if p.requires_grad]
+    detector_params = [p for p in detector.parameters() if p.requires_grad]
+    print(sum(p.numel() for p in detector_params))
     optimizer_type = params.optimizers.type
     optimizer_params = params.optimizers.__dict__[optimizer_type].__dict__
-    optimizer = OPTIMIZERS[optimizer_type](model_params, **optimizer_params)
+    optimizer = OPTIMIZERS[optimizer_type](detector_params, **optimizer_params)
 
     # Define the learning rate scheduler
     lr_scheduler_type = params.lr_schedulers.type
@@ -93,7 +91,7 @@ def train(params):
 
     # Call the training/evaluation loop
     learning_utils.training_loop(
-        params, model, optimizer, lr_scheduler, train_dataloader, test_dataloader
+        params, detector, optimizer, lr_scheduler, train_dataloader, test_dataloader
     )
 
 
