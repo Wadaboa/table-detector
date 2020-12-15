@@ -42,7 +42,7 @@ backbone:
 detector:
   # Actual detector to use
   # Types: fast_rcnn, faster_rcnn
-  type: "fast_rcnn"
+  type: "faster_rcnn"
 
 # What optimizer to use for gradient descent
 optimizers:

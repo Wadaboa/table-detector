@@ -12,6 +12,8 @@ from collections import defaultdict, deque
 
 import torch
 
+import utils
+
 
 class SmoothedValue():
     '''
@@ -156,7 +158,18 @@ class MetricLogger(object):
 
 
 def collate_fn(batch):
-    return tuple(zip(*batch))
+    '''
+    Flatten the given batch, which is a list of lists like the following
+    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...], [(img_2_1, targets_2_1), ...], ...]
+
+    to be a single list of tuples like the following
+    [(img_1_1, targets_1_1), (img_1_2, targets_1_2), ..., (img_2_1, targets_2_1), ...]
+
+    and then zip it, so as to obtain a tuple of tuples like the following
+    ((img_1_1, img_1_2, img_2_1, ...), (targets_1_1, targets_1_2, targets_2_1, ...))
+    '''
+    flattened_batch = list(utils.flatten(batch))
+    return tuple(zip(*flattened_batch))
 
 
 def train_one_epoch(params, model, optimizer, dataloader, epoch):
@@ -169,8 +182,9 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
 
     for images, targets in metric_logger.log_every(dataloader, params.log_interval, header):
         images = list(image.to(params.device) for image in images)
-        targets = [{k: v.to(params.device) for k, v in t.items()}
-                   for t in targets]
+        targets = [
+            {k: v.to(params.device) for k, v in t.items()} for t in targets
+        ]
 
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())

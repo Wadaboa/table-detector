@@ -75,7 +75,6 @@ def train(params):
 
     # Define the optimizer
     detector_params = [p for p in detector.parameters() if p.requires_grad]
-    print(sum(p.numel() for p in detector_params))
     optimizer_type = params.optimizers.type
     optimizer_params = params.optimizers.__dict__[optimizer_type].__dict__
     optimizer = OPTIMIZERS[optimizer_type](detector_params, **optimizer_params)

@@ -21,6 +21,7 @@ from pathlib import Path
 
 import cv2
 import torch
+import torchvision.transforms.functional as TF
 import numpy as np
 import PIL
 from PIL import Image
@@ -187,28 +188,35 @@ class MarmotTableRecognitionDataset(Dataset):
     def __getitem__(self, index):
         img = self.get_image(index)
         boxes = self.find_tables(index)
-        t_boxes = torch.tensor(boxes, dtype=torch.float32)
+        t_boxes = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
 
+        # Compute masks from boxes
         masks = []
         cv_img = utils.to_numpy(img)
         for box in boxes:
             mask = box_to_mask(cv_img, box)
             masks.append(mask)
 
+        # Build the target dict
         target = {}
-        target["boxes"] = boxes
+        target["boxes"] = t_boxes
         target["labels"] = torch.ones((len(boxes),), dtype=torch.int64)
         target["masks"] = torch.tensor(masks, dtype=torch.int64)
         target["image_id"] = torch.tensor([index])
         target["area"] = (
             (t_boxes[:, 3] - t_boxes[:, 1]) *
             (t_boxes[:, 2] - t_boxes[:, 0])
-        )
+        ) if len(boxes) > 0 else torch.zeros((len(boxes),), dtype=torch.int64)
         target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
 
+        # Apply the given transformations
         if self.transforms is not None:
             # img, target = self.transforms(img, target)
             img = self.transforms(img)
+
+        # Ensure that the image is a PyTorch tensor
+        if not isinstance(img, torch.Tensor):
+            img = TF.pil_to_tensor(img)
 
         return [(img, target)]
 
@@ -355,14 +363,18 @@ class ICDAR13TableRecognitionDataset(Dataset):
         res = []
         for page, boxes_in_page in boxes.items():
             img = imgs[page]
-            t_boxes = torch.tensor(boxes_in_page, dtype=torch.float32)
+            t_boxes = torch.tensor(
+                boxes_in_page, dtype=torch.float32
+            ).reshape(-1, 4)
 
+            # Compute masks from boxes
             masks = []
             cv_img = utils.to_numpy(img)
             for box in boxes_in_page:
                 mask = box_to_mask(cv_img, box)
                 masks.append(mask)
 
+            # Build the target dict
             target = {}
             target["boxes"] = t_boxes
             target["labels"] = torch.ones(
@@ -373,13 +385,19 @@ class ICDAR13TableRecognitionDataset(Dataset):
             target["area"] = (
                 abs(t_boxes[:, 3] - t_boxes[:, 1]) *
                 abs(t_boxes[:, 2] - t_boxes[:, 0])
-            )
+            ) if len(boxes) > 0 else torch.zeros((len(boxes_in_page),), dtype=torch.int64)
             target["iscrowd"] = torch.zeros(
                 (len(boxes_in_page),), dtype=torch.int64
             )
 
+            # Apply the given transformations
             if self.transforms is not None:
-                img, target = self.transforms(img, target)
+                # img, target = self.transforms(img, target)
+                img = self.transforms(img)
+
+            # Ensure that the image is a PyTorch tensor
+            if not isinstance(img, torch.Tensor):
+                img = TF.pil_to_tensor(img)
 
             res.append((img, target))
 

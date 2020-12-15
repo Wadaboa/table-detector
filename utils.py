@@ -45,6 +45,17 @@ def to_numpy(img):
     return None
 
 
+def flatten(a):
+    """
+    Given a multidimensional list/set/range, returns its flattened version
+    """
+    if isinstance(a, (list, set, range)):
+        for s in a:
+            yield from flatten(s)
+    else:
+        yield a
+
+
 class Struct:
     '''
     Struct class, s.t. a nested dictionary is transformed
