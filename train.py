@@ -29,11 +29,11 @@ def get_dataset(params):
     dataset_type = params.train_dataset
     dataset = DATASETS[dataset_type](
         roots=params.datasets.__dict__[dataset_type].path,
-        transforms=torchvision.transforms.Compose([
-            torchvision.transforms.Resize(
-                (params.input_size.height, params.input_size.width)
-            )
-        ])
+        # transforms=torchvision.transforms.Compose([
+        #    transforms.Resize(
+        #        (params.input_size.height, params.input_size.width)
+        #    )
+        # ])
     )
     if params.dummy.enabled:
         dataset = torch.utils.data.Subset(

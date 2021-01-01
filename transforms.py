@@ -10,9 +10,30 @@ import cv2
 import torch
 import torch.nn as nn
 import numpy as np
+import torchvision.transforms as T
 import torchvision.transforms.functional as TF
+from torchvision.models.detection.transform import resize_boxes
+from PIL import Image
 
 import utils
+
+
+class Resize(T.Resize):
+    '''
+    Resize transform subclass, to handle resizing bounding boxes
+    '''
+
+    def __init__(self, size, interpolation=Image.BILINEAR):
+        super(Resize, self).__init__(size, interpolation=interpolation)
+
+    def forward(self, input):
+        if isinstance(input, dict):
+            input["boxes"] = resize_boxes(
+                input["boxes"], input["image_shape"][:-1], self.size
+            )
+            input["masks"] = super().forward(input["masks"])
+            return input
+        return super().forward(input)
 
 
 class DocumentBrightnessTransform(nn.Module):

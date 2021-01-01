@@ -182,7 +182,8 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     header = 'Epoch: [{}]'.format(epoch)
 
     for images, targets in metric_logger.log_every(dataloader, params.log_interval, header):
-        images = torch.stack(images).to(params.device)
+        #images = torch.stack(images).to(params.device)
+        images = list(image.to(params.device) for image in images)
         targets = [
             {k: v.to(params.device) for k, v in t.items()} for t in targets
         ]

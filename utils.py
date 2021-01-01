@@ -1,5 +1,6 @@
 import random
 
+import cv2
 import numpy as np
 import torch
 import PIL
@@ -37,16 +38,26 @@ def to_numpy(img):
     if isinstance(img, np.ndarray):
         return img
     if isinstance(img, torch.Tensor):
-        return img.detach().cpu().numpy()
+        return img.detach().cpu().numpy().reshape(
+            img.shape[1], img.shape[2], img.shape[0]
+        )
     if isinstance(img, PIL.Image.Image):
         return np.asarray(img).copy()
     return None
 
 
+def show_image(img, window_name):
+    '''
+    Show the given image in a OpenCV window
+    '''
+    cv2.imshow(window_name, to_numpy(img))
+    cv2.waitKey(0)
+
+
 def flatten(a):
-    """
+    '''
     Given a multidimensional list/set/range, returns its flattened version
-    """
+    '''
     if isinstance(a, (list, set, range)):
         for s in a:
             yield from flatten(s)

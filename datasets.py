@@ -161,8 +161,10 @@ class MarmotTableRecognitionDataset(Dataset):
         img = self.get_image(index)
         if self.transforms is not None and not original:
             img = self.transforms(img)
-        img = utils.to_numpy(img)
-        cv2.imshow(f"Marmot dataset ~ Image #{index}", img)
+        cv2.imshow(
+            f"Marmot dataset ~ Image #{index}",
+            utils.to_numpy(img)
+        )
         cv2.waitKey(0)
 
     def show_labeled_image(self, index, original=False):
@@ -203,6 +205,7 @@ class MarmotTableRecognitionDataset(Dataset):
         target["labels"] = torch.ones((len(boxes),), dtype=torch.int64)
         target["masks"] = torch.tensor(masks, dtype=torch.int64)
         target["image_id"] = torch.tensor([index])
+        target["image_shape"] = torch.tensor(cv_img.shape, dtype=torch.int64)
         target["area"] = (
             (t_boxes[:, 3] - t_boxes[:, 1]) *
             (t_boxes[:, 2] - t_boxes[:, 0])
@@ -325,7 +328,6 @@ class ICDAR13TableRecognitionDataset(Dataset):
             actual_img = img.copy()
             if self.transforms is not None and not original:
                 actual_img = self.transforms(actual_img)
-            actual_img = utils.to_numpy(actual_img)
             cv2.imshow(
                 f"ICDAR 2013 dataset ~ Image #{index}, page #{i}",
                 utils.to_numpy(actual_img)
@@ -382,6 +384,9 @@ class ICDAR13TableRecognitionDataset(Dataset):
             )
             target["masks"] = torch.tensor(masks, dtype=torch.int64)
             target["image_id"] = torch.tensor([index])
+            target["image_shape"] = torch.tensor(
+                cv_img.shape, dtype=torch.int64
+            )
             target["area"] = (
                 abs(t_boxes[:, 3] - t_boxes[:, 1]) *
                 abs(t_boxes[:, 2] - t_boxes[:, 0])
