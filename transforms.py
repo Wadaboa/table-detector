@@ -25,8 +25,10 @@ class DocumentBrightnessTransform(nn.Module):
         super().__init__()
         self.alpha = float(alpha)
 
-    def forward(self, img):
-        tmp_img = utils.to_numpy(img)
+    def forward(self, input):
+        if isinstance(input, dict):
+            return input
+        tmp_img = utils.to_numpy(input)
         transformed_img = cv2.add(tmp_img, np.array([self.alpha]))
         return TF.to_pil_image(transformed_img)
 
@@ -48,8 +50,10 @@ class DocumentDilationTransform(nn.Module):
         self.kernel = kernel
         self.pixel_range = pixel_range
 
-    def forward(self, img):
-        tmp_img = utils.to_numpy(img)
+    def forward(self, input):
+        if isinstance(input, dict):
+            return input
+        tmp_img = utils.to_numpy(input)
         _, mask = cv2.threshold(
             tmp_img, self.pixel_range[0], self.pixel_range[1], cv2.THRESH_BINARY_INV
         )
@@ -76,8 +80,10 @@ class DocumentBackgroundColorTranform(nn.Module):
         super().__init__()
         self.color = color
 
-    def forward(self, img):
-        tmp_img = utils.to_numpy(img)
+    def forward(self, input):
+        if isinstance(input, dict):
+            return input
+        tmp_img = utils.to_numpy(input)
         if len(tmp_img.shape) < 3:
             tmp_img = cv2.cvtColor(tmp_img, cv2.COLOR_GRAY2BGR)
         gray = cv2.cvtColor(tmp_img, cv2.COLOR_BGR2GRAY)
@@ -112,8 +118,10 @@ class DocumentSmudgeTransform(nn.Module):
         img = cv2.bitwise_not(mask)
         return img
 
-    def forward(self, img):
-        tmp_img = utils.to_numpy(img)
+    def forward(self, input):
+        if isinstance(input, dict):
+            return input
+        tmp_img = utils.to_numpy(input)
         b, g, r = cv2.split(tmp_img)
         b, g, r = (
             self.basic_transform(b),

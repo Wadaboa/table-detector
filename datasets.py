@@ -211,8 +211,8 @@ class MarmotTableRecognitionDataset(Dataset):
 
         # Apply the given transformations
         if self.transforms is not None:
-            # img, target = self.transforms(img, target)
             img = self.transforms(img)
+            target = self.transforms(target)
 
         # Ensure that the image is a PyTorch tensor
         if not isinstance(img, torch.Tensor):
@@ -392,8 +392,8 @@ class ICDAR13TableRecognitionDataset(Dataset):
 
             # Apply the given transformations
             if self.transforms is not None:
-                # img, target = self.transforms(img, target)
                 img = self.transforms(img)
+                target = self.transforms(target)
 
             # Ensure that the image is a PyTorch tensor
             if not isinstance(img, torch.Tensor):

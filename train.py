@@ -28,7 +28,12 @@ def get_dataset(params):
     '''
     dataset_type = params.train_dataset
     dataset = DATASETS[dataset_type](
-        roots=params.datasets.__dict__[dataset_type].path
+        roots=params.datasets.__dict__[dataset_type].path,
+        transforms=torchvision.transforms.Compose([
+            torchvision.transforms.Resize(
+                (params.input_size.height, params.input_size.width)
+            )
+        ])
     )
     if params.dummy.enabled:
         dataset = torch.utils.data.Subset(
@@ -74,23 +79,25 @@ def train(params):
     detector.to(params.device)
 
     # Define the optimizer
-    detector_params = [p for p in detector.parameters() if p.requires_grad]
     optimizer_type = params.optimizers.type
-    optimizer_params = params.optimizers.__dict__[optimizer_type].__dict__
-    optimizer = OPTIMIZERS[optimizer_type](detector_params, **optimizer_params)
+    optimizer = OPTIMIZERS[optimizer_type](
+        [p for p in detector.parameters() if p.requires_grad],
+        **params.optimizers.__dict__[optimizer_type].__dict__
+    )
 
     # Define the learning rate scheduler
+    lr_scheduler = None
     lr_scheduler_type = params.lr_schedulers.type
-    lr_scheduler_params = params.lr_schedulers.__dict__[
-        lr_scheduler_type
-    ].__dict__
-    lr_scheduler = LR_SCHEDULERS[lr_scheduler_type](
-        optimizer, **lr_scheduler_params
-    )
+    if lr_scheduler_type in LR_SCHEDULERS:
+        lr_scheduler = LR_SCHEDULERS[lr_scheduler_type](
+            optimizer,
+            **params.lr_schedulers.__dict__[lr_scheduler_type].__dict__
+        )
 
     # Call the training/evaluation loop
     learning_utils.training_loop(
-        params, detector, optimizer, lr_scheduler, train_dataloader, test_dataloader
+        params, detector, optimizer, train_dataloader,
+        test_dataloader, lr_scheduler=lr_scheduler
     )
 
 

@@ -1,13 +1,13 @@
 datasets:
   marmot:
     path:
-      - "datasets/marmot/table_recognition/data/english/positive"
-      #- "datasets/marmot/table_recognition/data/english/negative"
-      #- "datasets/marmot/table_recognition/data/chinese/positive"
-      #- "datasets/marmot/table_recognition/data/chinese/negative"
+      - datasets/marmot/table_recognition/data/english/positive
+      #- datasets/marmot/table_recognition/data/english/negative
+      #- datasets/marmot/table_recognition/data/chinese/positive
+      #- datasets/marmot/table_recognition/data/chinese/negative
 
-train_dataset: "marmot"
-val_dataset: "marmot"
+train_dataset: marmot
+val_dataset: marmot
 # Random seed for all the randomness sources
 random_seed: 42
 # Use a small slice of data to debug
@@ -27,27 +27,40 @@ batch_size: 2
 # Number of data loading workers
 workers: 4
 # Where should data be processed
-device: "cpu"
+device: cpu
+input_size:
+  width: 224
+  height: 224
 # What ImageNet backbone to use
 backbone:
   # Family of the backbone
   # Types: alexnet, densenet, mobilenet, vgg
-  family: "mobilenet"
+  family: mobilenet
   # Actual backbone to use (among the ones in the above family)
   # See https://github.com/pytorch/vision/tree/master/torchvision/models
-  type: "mobilenet_v2"
+  type: mobilenet_v2
   # If pretrained or not
   pretrained: True
 # What model to use for table detection
 detector:
   # Actual detector to use
-  # Types: fast_rcnn, faster_rcnn
-  type: "faster_rcnn"
+  # Types: rcnn, fast_rcnn, faster_rcnn
+  type: rcnn
+  rcnn:
+    num_proposals: 2000
+    ss_type: fast
+  fast_rcnn:
+    num_proposals: 2000
+    ss_type: fast
+    roi_pool:
+      output_size:
+        height: 7
+        width: 7
 
 # What optimizer to use for gradient descent
 optimizers:
   # Type of optimizer
-  type: "adam"
+  type: adam
   # Adam optimizer
   adam:
     # Learning rate
@@ -80,7 +93,7 @@ optimizers:
 # How to decay the learning rate during training
 lr_schedulers:
   # Type of learning rate scheduler
-  type: "multi_step"
+  type: none
   # Step scheduler
   step:
     # Period of learning rate decay

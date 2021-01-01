@@ -160,7 +160,8 @@ class MetricLogger(object):
 def collate_fn(batch):
     '''
     Flatten the given batch, which is a list of lists like the following
-    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...], [(img_2_1, targets_2_1), ...], ...]
+    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...],
+       [(img_2_1, targets_2_1), ...], ...]
 
     to be a single list of tuples like the following
     [(img_1_1, targets_1_1), (img_1_2, targets_1_2), ..., (img_2_1, targets_2_1), ...]
@@ -181,12 +182,13 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     header = 'Epoch: [{}]'.format(epoch)
 
     for images, targets in metric_logger.log_every(dataloader, params.log_interval, header):
-        images = list(image.to(params.device) for image in images)
+        images = torch.stack(images).to(params.device)
         targets = [
             {k: v.to(params.device) for k, v in t.items()} for t in targets
         ]
 
-        loss_dict = model(images, targets)
+        loss_dict = model(images)
+        print(loss_dict)
         losses = sum(loss for loss in loss_dict.values())
         loss_value = losses.item()
 
@@ -205,11 +207,13 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     return metric_logger
 
 
-def training_loop(params, model, optimizer, lr_scheduler, train_dataloader, val_dataloader):
+def training_loop(params, model, optimizer, train_dataloader,
+                  val_dataloader, lr_scheduler=None):
     start_time = time.time()
     for epoch in range(1, params.epochs + 1):
         train_one_epoch(params, model, optimizer, train_dataloader, epoch)
-        lr_scheduler.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
         '''
         if args.output_dir:
             utils.save_on_master({
@@ -222,7 +226,7 @@ def training_loop(params, model, optimizer, lr_scheduler, train_dataloader, val_
         '''
 
         # evaluate after every epoch
-        #evaluate(model, val_dataloader)
+        # evaluate(model, val_dataloader)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
