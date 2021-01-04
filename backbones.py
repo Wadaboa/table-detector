@@ -22,6 +22,8 @@ def _patch_alexnet(backbone, classifier=None):
     '''
     Patch an AlexNet backbone, by removing the final classifier,
     or substituting it if one is given
+
+    Expected input shape: At least 224x224, with 3 channels
     '''
     if classifier is not None:
         backbone.classifier[6] = classifier(backbone.classifier[6].in_features)
@@ -35,12 +37,14 @@ def _patch_densenet(backbone, classifier=None):
     '''
     Patch a DenseNet backbone, by removing the final classifier,
     or substituting it if one is given
+
+    Expected input shape: At least 32x32, with 3 channels
     '''
     if classifier is not None:
         backbone.classifier = classifier(backbone.classifier.in_features)
         return backbone
     features = backbone.features
-    features.output_channels = backbone.classifier.in_features
+    features.out_channels = backbone.classifier.in_features
     return features
 
 
@@ -48,6 +52,8 @@ def _patch_mobilenet(backbone, classifier=None):
     '''
     Patch a MobileNet backbone, by removing the final classifier,
     or substituting it if one is given
+
+    Expected input shape: At least 32x32, with 3 channels
     '''
     if classifier is not None:
         backbone.classifier[1] = classifier(backbone.classifier[1].in_features)
@@ -61,6 +67,8 @@ def _patch_vgg(backbone, classifier=None):
     '''
     Patch a VGG backbone, by removing the final classifier,
     or substituting it if one is given
+
+    Expected input shape: At least 32x32, with 3 channels
     '''
     if classifier is not None:
         backbone.classifier[6] = classifier(backbone.classifier[6].in_features)

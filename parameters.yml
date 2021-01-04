@@ -45,7 +45,7 @@ backbone:
 detector:
   # Actual detector to use
   # Types: rcnn, fast_rcnn, faster_rcnn
-  type: rcnn
+  type: fast_rcnn
   rcnn:
     num_proposals: 2000
     ss_type: fast

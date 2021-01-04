@@ -1,4 +1,7 @@
 import random
+import traceback
+import warnings
+import sys
 
 import cv2
 import numpy as np
@@ -38,9 +41,7 @@ def to_numpy(img):
     if isinstance(img, np.ndarray):
         return img
     if isinstance(img, torch.Tensor):
-        return img.detach().cpu().numpy().reshape(
-            img.shape[1], img.shape[2], img.shape[0]
-        )
+        return img.detach().cpu().permute(1, 2, 0).numpy()
     if isinstance(img, PIL.Image.Image):
         return np.asarray(img).copy()
     return None
@@ -52,6 +53,15 @@ def show_image(img, window_name):
     '''
     cv2.imshow(window_name, to_numpy(img))
     cv2.waitKey(0)
+
+
+def cnn_output_size(model, input_size):
+    '''
+    Return the spatial output size of a CNN model
+    '''
+    height, width = input_size
+    dummy_image = torch.zeros((1, 3, height, width))
+    return model(dummy_image).shape[2:]
 
 
 def flatten(a):
@@ -91,3 +101,19 @@ class Struct:
 
     def __repr__(self):
         return str(self.__dict__)
+
+
+def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+    '''
+    Print detailed traceback of log warnings
+    '''
+    log = file if hasattr(file, 'write') else sys.stderr
+    traceback.print_stack(file=log)
+    log.write(
+        warnings.formatwarning(
+            message, category, filename, lineno, line
+        )
+    )
+
+
+warnings.showwarning = warn_with_traceback

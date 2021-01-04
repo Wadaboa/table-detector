@@ -15,15 +15,6 @@ import backbones
 import utils
 
 
-def cnn_output_size(model, input_size):
-    '''
-    Return the spatial output size of a CNN model
-    '''
-    height, width = input_size
-    dummy_image = torch.zeros((1, 3, height, width))
-    return model(dummy_image).shape[2:]
-
-
 class RCNN(nn.Module):
     '''
     R-CNN PyTorch module
@@ -31,34 +22,57 @@ class RCNN(nn.Module):
 
     SS = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
 
-    def __init__(self, params, backbone, num_classes, device="cpu",
+    def __init__(self, params, num_classes, device="cpu",
                  num_proposals=2000, ss_type="fast"):
         super(RCNN, self).__init__()
         self.params = params
-        self.backbone = backbone
         self.num_classes = num_classes
         self.device = device
         self.num_proposals = num_proposals
         self.ss_type = ss_type
 
+        # Get backbone
+        self.backbone = backbones.get_backbone(params)
+
         # Save backbone input/output sizes
         self.backbone_input_size = (
-            params.input_size.height, params.input_size.width
+            self.params.input_size.height,
+            self.params.input_size.width
         )
-        self.backbone_output_size = cnn_output_size(
-            backbone, self.backbone_input_size
+        self.backbone_output_height, self.backbone_output_width = utils.cnn_output_size(
+            self.backbone, self.backbone_input_size
+        )
+        self.backbone_output_size = (
+            self.backbone_output_height *
+            self.backbone_output_width *
+            self.backbone.out_channels
         )
 
-        self.class_score = nn.Linear(self.backbone.out_channels, num_classes)
+        # R-CNN prediction head
+        self.class_score = nn.Linear(
+            self.backbone_output_size, self.num_classes
+        )
         self.bbox_correction = nn.Linear(
-            self.backbone.out_channels, num_classes * 4
+            self.backbone_output_size, self.num_classes * 4
         )
 
     def selective_search(self, img):
+        '''
+        Use OpenCV to obtain a list of bounding box proposals
+        to pass to the backbone
+        '''
+        assert len(img.shape) == 3, (
+            "Selective search can be performed on one image at a time"
+        )
         assert img.sum().item() != 0, (
             "Found a totally black image when running selective search"
         )
-        self.SS.setBaseImage(utils.to_numpy(img))
+        cv2.setUseOptimized(True)
+
+        # Set base image
+        np_img = utils.to_numpy(img)
+        rgb_img = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+        self.SS.setBaseImage(rgb_img)
 
         # Set selective search type
         # Fast but low recall
@@ -73,38 +87,50 @@ class RCNN(nn.Module):
                 "Argument `ss_type` could only be 'fast' or 'quality'"
             )
 
-        # Compute boxes and extract the corresponding proposals
+        # Compute boxes, extract the corresponding proposals
+        # and warp them to be compatible with the chosen backbone
         boxes = self.SS.process()[:self.num_proposals]
-        proposals = []
-        for box in boxes:
-            proposals.append(
-                img[:, box[0]:box[0] + box[2], box[1]:box[1] + box[3]]
+        proposals = torch.zeros(
+            (self.num_proposals, 3, *self.backbone_input_size),
+            dtype=torch.uint8, device=self.device
+        )
+        boxes_coords = torch.zeros(
+            (self.num_proposals, 4), dtype=torch.uint8, device=self.device
+        )
+        for i, box in enumerate(boxes):
+            proposal = img[:, box[1]:box[1] + box[3], box[0]:box[0] + box[2]]
+            assert all(proposal.shape) != 0, (
+                "A selective search box has wrong shape"
+            )
+            proposals[i] = TF.resize(proposal, self.backbone_input_size)
+            boxes_coords[i] = torch.tensor(
+                [box[0], box[1], box[0] + box[2], box[1] + box[3]]
             )
 
-        return proposals
+        return proposals, boxes_coords
 
     def forward(self, images):
+        '''
+        1. Selective search for each image
+        2. Backbone for each proposal in an image
+        3. R-CNN prediction head for each proposal in an image
+           (input is the output of backbone)
+        '''
         assert isinstance(images, list) and len(images[0].shape) == 3
         class_scores = torch.zeros(
-            (len(images), self.num_proposals, self.num_classes)
+            (len(images), self.num_proposals, self.num_classes),
+            dtype=torch.float, device=self.device
         )
         bbox_corrections = torch.zeros(
-            (len(images), self.num_proposals, 4)
+            (len(images), self.num_proposals, self.num_classes * 4),
+            dtype=torch.float, device=self.device
         )
         for i, img in enumerate(images):
-            proposals = self.selective_search(img)
-            for proposal in proposals:
-                warped_proposal = TF.resize(
-                    proposal, self.backbone_input_size
-                )
-                features = self.backbone(warped_proposal.float().unsqueeze(0))
-                flattened_features = torch.flatten(features, start_dim=1)
-                class_scores[i, :len(proposals), :] = self.class_score(
-                    flattened_features
-                )
-                bbox_corrections[i, :len(proposals), :] = self.bbox_correction(
-                    flattened_features
-                )
+            proposals, _ = self.selective_search(img)
+            features = self.backbone(proposals)
+            flattened_features = torch.flatten(features, start_dim=1)
+            class_scores[i] = self.class_score(flattened_features)
+            bbox_corrections[i] = self.bbox_correction(flattened_features)
         return class_scores, bbox_corrections
 
 
@@ -113,10 +139,10 @@ class FastRCNN(RCNN):
     Fast R-CNN PyTorch module
     '''
 
-    def __init__(self, params, backbone, num_classes,
-                 device="cpu", num_proposals=2000, ss_type="fast"):
+    def __init__(self, params, num_classes, device="cpu",
+                 num_proposals=2000, ss_type="fast"):
         super(FastRCNN, self).__init__(
-            params, backbone, num_classes, device=device,
+            params, num_classes, device=device,
             num_proposals=num_proposals, ss_type=ss_type
         )
         self.roi_pool_output_size = (
@@ -124,38 +150,51 @@ class FastRCNN(RCNN):
             params.detector.fast_rcnn.roi_pool.output_size.width
         )
         self.roi_pool_spatial_scale = (
-            self.backbone_output_size[0] /
-            self.backbone_input_size[0]
+            self.backbone_output_height / self.backbone_input_size[0]
         )
         self.roi_pool = torchvision.ops.RoIPool(
             self.roi_pool_output_size, self.roi_pool_spatial_scale
         )
 
     def forward(self, images):
-        assert len(images.shape) == 4
-        features = self.backbone(images)
-        proposals = self.selective_search(images)
-        rescaled_features = self.roi_pool(features, proposals)
-        flattened_features = torch.flatten(rescaled_features)
-        class_scores = self.class_score(flattened_features)
-        bbox_corrections = self.bbox_correction(flattened_features)
+        '''
+        1. Selective search for the each image
+        2. Backbone for each image
+        3. ROI pooling layer to crop and warp backbone features according to proposals
+        4. R-CNN prediction head for each proposal in an image 
+           (input is the output of ROI pool)
+        '''
+        assert isinstance(images, list) and len(images[0].shape) == 3
+        class_scores = torch.zeros(
+            (len(images), self.num_proposals, self.num_classes),
+            dtype=torch.float, device=self.device
+        )
+        bbox_corrections = torch.zeros(
+            (len(images), self.num_proposals, self.num_classes * 4),
+            dtype=torch.float, device=self.device
+        )
+        for i, img in enumerate(images):
+            warped_image = TF.resize(img, self.backbone_input_size)
+            features = self.backbone(warped_image.float().unsqueeze(0))
+            _, boxes_coords = self.selective_search(warped_image)
+            rescaled_features = self.roi_pool(features, [boxes_coords.float()])
+            flattened_features = torch.flatten(rescaled_features, start_dim=1)
+            class_scores[i] = self.class_score(flattened_features)
+            bbox_corrections[i] = self.bbox_correction(flattened_features)
         return class_scores, bbox_corrections
 
 
 def _get_rcnn(params, num_classes):
     return RCNN(
-        params, backbones.get_backbone(params), num_classes,
-        device=params.device, num_proposals=params.detector.rcnn.num_proposals,
+        params, num_classes, device=params.device,
+        num_proposals=params.detector.rcnn.num_proposals,
         ss_type=params.detector.rcnn.ss_type
     )
 
 
 def _get_fast_rcnn(params, num_classes):
-    backbone = backbones.get_backbone(params)
-
     return FastRCNN(
-        params, backbone, num_classes, roi_pool_output_size,
-        roi_pool_spatial_scale, device=params.device,
+        params, num_classes, device=params.device,
         num_proposals=params.detector.fast_rcnn.num_proposals,
         ss_type=params.detector.fast_rcnn.ss_type
     )
