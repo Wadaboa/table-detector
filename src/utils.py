@@ -129,11 +129,12 @@ def show_image(img, window_name):
 
 def cnn_output_size(model, input_size):
     '''
-    Return the spatial output size of a CNN model
+    Return the output size of a CNN model as a tuple (c, h, w)
     '''
     height, width = input_size
     dummy_image = torch.zeros((1, 3, height, width))
-    return model(dummy_image).shape[2:]
+    dummy_output = model(dummy_image).squeeze(0)
+    return dummy_output.shape
 
 
 def flatten(a):

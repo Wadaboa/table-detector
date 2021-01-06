@@ -42,11 +42,11 @@ training:
 # What ImageNet backbone to use
 backbone:
   # Family of the backbone
-  # Types: alexnet, densenet, mobilenet, vgg
-  family: mobilenet
+  # Types: alexnet, densenet, mobilenet, resnet, vgg
+  family: resnet
   # Actual backbone to use (among the ones in the above family)
   # See https://github.com/pytorch/vision/tree/master/torchvision/models
-  type: mobilenet_v2
+  type: resnet50
   # If pretrained or not
   pretrained: True
   # Desired input size
@@ -80,21 +80,8 @@ detector:
       # (https://github.com/opencv/opencv_extra/blob/master/testdata/cv/ximgproc/model.yml.gz)
       model_path: models/edge_boxes.gz
 
-  # R-CNN configuration
-  rcnn:
-    # Number of maximum selective search proposals per image
-    num_proposals: 2000
-    # Selective search strategy
-    # Types: fast, quality
-    ss_type: fast
-
   # Fast R-CNN configuration
   fast_rcnn:
-    # Number of maximum selective search proposals per image
-    num_proposals: 2000
-    # Selective search strategy
-    # Types: fast, quality
-    ss_type: fast
     # ROI pooling layer configuration
     roi_pool:
       # ROI pooling layer output size

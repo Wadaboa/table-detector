@@ -170,9 +170,9 @@ class FastRCNN(RCNN):
 
     def __init__(self, params, num_classes):
         super(FastRCNN, self).__init__(params, num_classes)
+        print(self.backbone)
         self.roi_pool_output_size = (
-            params.detector.fast_rcnn.roi_pool.output_size.height,
-            params.detector.fast_rcnn.roi_pool.output_size.width
+            self.backbone.out_height, self.backbone.out_width
         )
         self.roi_pool_spatial_scale = (
             self.backbone.out_height / self.backbone.in_height
@@ -260,6 +260,6 @@ def _get_faster_rcnn(params, num_classes):
 def get_detector(params, num_classes):
     detector_func_name = f'_get_{params.detector.type}'
     assert detector_func_name in globals(), (
-        f'The detector type {params.detector.type} is not yet supported'
+        f'The detector type `{params.detector.type}` is not yet supported'
     )
     return globals()[detector_func_name](params, num_classes)
