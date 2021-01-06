@@ -2,7 +2,7 @@ import torch
 import torchvision
 import yaml
 
-import learning_utils
+import learning
 import transforms
 import detectors
 import utils
@@ -68,12 +68,12 @@ def train(params):
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_sampler=train_batch_sampler,
         num_workers=params.generic.workers,
-        collate_fn=learning_utils.collate_fn
+        collate_fn=learning.collate_fn
     )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset, batch_size=1, sampler=test_sampler,
         num_workers=params.generic.workers,
-        collate_fn=learning_utils.collate_fn
+        collate_fn=learning.collate_fn
     )
 
     # Get the object detector
@@ -97,7 +97,7 @@ def train(params):
         )
 
     # Call the training/evaluation loop
-    learning_utils.training_loop(
+    learning.training_loop(
         params, detector, optimizer, train_dataloader,
         test_dataloader, lr_scheduler=lr_scheduler
     )

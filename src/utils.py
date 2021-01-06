@@ -9,6 +9,34 @@ import torch
 import PIL
 
 
+class Struct:
+    '''
+    Struct class, s.t. a nested dictionary is transformed
+    into a nested object
+    '''
+
+    def __init__(self, **entries):
+        for k, v in entries.items():
+            if isinstance(v, dict):
+                self.__dict__.update({k: Struct(**v)})
+            else:
+                self.__dict__.update({k: v})
+
+    def get_true_key(self):
+        '''
+        Return the only key in the Struct s.t. its value is True
+        '''
+        true_types = [k for k, v in self.__dict__.items() if v == True]
+        assert len(true_types) == 1
+        return true_types[0]
+
+    def __str__(self):
+        return str(self.__dict__)
+
+    def __repr__(self):
+        return str(self.__dict__)
+
+
 def deterministic_torch(seed):
     '''
     Set a deterministic behaviour in PyTorch
@@ -62,6 +90,35 @@ def to_tensor(img):
     return None
 
 
+def get_image_size(img):
+    '''
+    Return the size of an image in format (width, height)
+    '''
+    if isinstance(img, np.ndarray):
+        return img.shape[1], img.shape[0]
+    elif isinstance(img, PIL.Image.Image):
+        return img.size
+    return None
+
+
+def box_to_mask(img, box):
+    '''
+    Convert a bounding box to a mask image,
+    where the box is a list or tuple like (x1, y1, x2, y2)
+    '''
+    mask = np.zeros(img.shape, np.dtype('uint8'))
+    mask[box[1]:box[3], box[0]:box[2], :] = 255
+    return mask
+
+
+def freeze_module(module):
+    '''
+    Remove gradient information from the given module's parameters
+    '''
+    for param in module.parameters():
+        param.requires_grad = False
+
+
 def show_image(img, window_name):
     '''
     Show the given image in a OpenCV window
@@ -88,34 +145,6 @@ def flatten(a):
             yield from flatten(s)
     else:
         yield a
-
-
-class Struct:
-    '''
-    Struct class, s.t. a nested dictionary is transformed
-    into a nested object
-    '''
-
-    def __init__(self, **entries):
-        for k, v in entries.items():
-            if isinstance(v, dict):
-                self.__dict__.update({k: Struct(**v)})
-            else:
-                self.__dict__.update({k: v})
-
-    def get_true_key(self):
-        '''
-        Return the only key in the Struct s.t. its value is True
-        '''
-        true_types = [k for k, v in self.__dict__.items() if v == True]
-        assert len(true_types) == 1
-        return true_types[0]
-
-    def __str__(self):
-        return str(self.__dict__)
-
-    def __repr__(self):
-        return str(self.__dict__)
 
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):

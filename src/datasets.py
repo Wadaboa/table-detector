@@ -11,6 +11,7 @@ x1,y1 ------
 --------x2,y2
 '''
 
+
 import glob
 import struct
 import binascii
@@ -32,27 +33,6 @@ import utils
 
 
 POUND_TO_INCH_FACTOR = 72
-
-
-def get_image_size(img):
-    '''
-    Return the size of an image in format (width, height)
-    '''
-    if isinstance(img, np.ndarray):
-        return img.shape[1], img.shape[0]
-    elif isinstance(img, PIL.Image.Image):
-        return img.size
-    return None
-
-
-def box_to_mask(img, box):
-    '''
-    Convert a bounding box to a mask image,
-    where the box is a list or tuple like (x1, y1, x2, y2)
-    '''
-    mask = np.zeros(img.shape, np.dtype('uint8'))
-    mask[box[1]:box[3], box[0]:box[2], :] = 255
-    return mask
 
 
 class MarmotTableRecognitionDataset(Dataset):
@@ -145,7 +125,7 @@ class MarmotTableRecognitionDataset(Dataset):
 
             # Translate origin from bottom-left corner
             # to top-left corner of the image
-            img_size = get_image_size(self.get_image(index))
+            img_size = utils.get_image_size(self.get_image(index))
             coords[1] = img_size[1] - coords[1]
             coords[3] = img_size[1] - coords[3]
 
@@ -196,7 +176,7 @@ class MarmotTableRecognitionDataset(Dataset):
         masks = []
         cv_img = utils.to_numpy(img)
         for box in boxes:
-            mask = box_to_mask(cv_img, box)
+            mask = utils.box_to_mask(cv_img, box)
             masks.append(mask)
 
         # Build the target dict
@@ -306,7 +286,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
 
                 # Translate origin from bottom-left corner
                 # to top-left corner of the image
-                img_size = get_image_size(imgs[int(page) - 1])
+                img_size = utils.get_image_size(imgs[int(page) - 1])
                 coords[1] = img_size[1] - coords[1]
                 coords[3] = img_size[1] - coords[3]
                 coords[1], coords[3] = coords[3], coords[1]
@@ -371,7 +351,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
             masks = []
             cv_img = utils.to_numpy(img)
             for box in boxes_in_page:
-                mask = box_to_mask(cv_img, box)
+                mask = utils.box_to_mask(cv_img, box)
                 masks.append(mask)
 
             # Build the target dict

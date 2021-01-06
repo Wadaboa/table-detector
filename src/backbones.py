@@ -35,7 +35,7 @@ class Backbone(nn.Module):
         # Get the backbone model and eventually freeze it
         self.model = self.get_backbone(self.backbone_type, self.pretrained)
         if self.pretrained:
-            freeze_module(self.model)
+            utils.freeze_module(self.model)
 
         # Extract only the features part from the backbone
         # or attach the given classifier to the end of it
@@ -85,14 +85,6 @@ class Backbone(nn.Module):
 
     def forward(self, inputs):
         return self.model.forward(inputs)
-
-
-def freeze_module(module):
-    '''
-    Remove gradient information from the given module's parameters
-    '''
-    for param in module.parameters():
-        param.requires_grad = False
 
 
 def _patch_alexnet(backbone, classifier=None):
