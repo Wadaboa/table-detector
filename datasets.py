@@ -218,9 +218,7 @@ class MarmotTableRecognitionDataset(Dataset):
             target = self.transforms(target)
 
         # Ensure that the image is a PyTorch tensor
-        if not isinstance(img, torch.Tensor):
-            img = TF.pil_to_tensor(img)
-
+        img = utils.to_tensor(img)
         return [(img, target)]
 
     def __len__(self):
@@ -401,9 +399,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 target = self.transforms(target)
 
             # Ensure that the image is a PyTorch tensor
-            if not isinstance(img, torch.Tensor):
-                img = TF.pil_to_tensor(img)
-
+            img = utils.to_tensor(img)
             res.append((img, target))
 
         return res

@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional as TF
-from torchvision.models.detection.faster_rcnn import FasterRCNN
 
 import backbones
 import utils
@@ -32,21 +31,7 @@ class RCNN(nn.Module):
         self.ss_type = ss_type
 
         # Get backbone
-        self.backbone = backbones.get_backbone(params)
-
-        # Save backbone input/output sizes
-        self.backbone_input_size = (
-            self.params.input_size.height,
-            self.params.input_size.width
-        )
-        self.backbone_output_height, self.backbone_output_width = utils.cnn_output_size(
-            self.backbone, self.backbone_input_size
-        )
-        self.backbone_output_size = (
-            self.backbone_output_height *
-            self.backbone_output_width *
-            self.backbone.out_channels
-        )
+        self.backbone = backbones.Backbone(params)
 
         # R-CNN prediction head
         self.class_score = nn.Linear(
@@ -91,7 +76,7 @@ class RCNN(nn.Module):
         # and warp them to be compatible with the chosen backbone
         boxes = self.SS.process()[:self.num_proposals]
         proposals = torch.zeros(
-            (self.num_proposals, 3, *self.backbone_input_size),
+            (self.num_proposals, 3, *self.backbone.in_size),
             dtype=torch.uint8, device=self.device
         )
         boxes_coords = torch.zeros(
@@ -102,14 +87,14 @@ class RCNN(nn.Module):
             assert all(proposal.shape) != 0, (
                 "A selective search box has wrong shape"
             )
-            proposals[i] = TF.resize(proposal, self.backbone_input_size)
+            proposals[i] = TF.resize(proposal, self.backbone.in_size)
             boxes_coords[i] = torch.tensor(
                 [box[0], box[1], box[0] + box[2], box[1] + box[3]]
             )
 
         return proposals, boxes_coords
 
-    def forward(self, images):
+    def forward(self, images, targets=None):
         '''
         1. Selective search for each image
         2. Backbone for each proposal in an image
@@ -150,18 +135,18 @@ class FastRCNN(RCNN):
             params.detector.fast_rcnn.roi_pool.output_size.width
         )
         self.roi_pool_spatial_scale = (
-            self.backbone_output_height / self.backbone_input_size[0]
+            self.backbone.out_height / self.backbone.in_height
         )
         self.roi_pool = torchvision.ops.RoIPool(
             self.roi_pool_output_size, self.roi_pool_spatial_scale
         )
 
-    def forward(self, images):
+    def forward(self, images, targets=None):
         '''
         1. Selective search for the each image
         2. Backbone for each image
         3. ROI pooling layer to crop and warp backbone features according to proposals
-        4. R-CNN prediction head for each proposal in an image 
+        4. R-CNN prediction head for each proposal in an image
            (input is the output of ROI pool)
         '''
         assert isinstance(images, list) and len(images[0].shape) == 3
@@ -174,7 +159,9 @@ class FastRCNN(RCNN):
             dtype=torch.float, device=self.device
         )
         for i, img in enumerate(images):
-            warped_image = TF.resize(img, self.backbone_input_size)
+            warped_image = TF.resize(
+                img, (self.backbone.in_height, self.backbone.in_width)
+            )
             features = self.backbone(warped_image.float().unsqueeze(0))
             _, boxes_coords = self.selective_search(warped_image)
             rescaled_features = self.roi_pool(features, [boxes_coords.float()])
@@ -182,6 +169,38 @@ class FastRCNN(RCNN):
             class_scores[i] = self.class_score(flattened_features)
             bbox_corrections[i] = self.bbox_correction(flattened_features)
         return class_scores, bbox_corrections
+
+
+class FasterRCNN(nn.Module):
+
+    def __init__(self, params, num_classes, device="cpu"):
+        super(FasterRCNN, self).__init__()
+        self.params = params
+        self.num_classes = num_classes
+        self.device = device
+
+        # Get backbone and Faster-RCNN model
+        self.backbone = backbones.Backbone(params)
+        anchor_sizes = ((4,), (8,), (16,), (32,), (64,), (128,))
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        anchor_generator = torchvision.models.detection.rpn.AnchorGenerator(
+            anchor_sizes, aspect_ratios
+        )
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=[0],
+                                                        output_size=7,
+                                                        sampling_ratio=2)
+        self.faster_rcnn = torchvision.models.detection.faster_rcnn.FasterRCNN(
+            self.backbone, num_classes, rpn_anchor_generator=anchor_generator, box_roi_pool=roi_pooler
+        )
+
+    def forward(self, images, targets=None):
+        print(len(images), images[0].shape)
+        outputs = self.faster_rcnn(
+            images, targets=targets
+        )
+        print(outputs)
+
+        return losses, detections
 
 
 def _get_rcnn(params, num_classes):
@@ -201,7 +220,7 @@ def _get_fast_rcnn(params, num_classes):
 
 
 def _get_faster_rcnn(params, num_classes):
-    return FasterRCNN(backbones.get_backbone(params), num_classes)
+    return FasterRCNN(params, num_classes, device=params.device)
 
 
 def get_detector(params, num_classes):

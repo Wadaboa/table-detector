@@ -40,10 +40,25 @@ def to_numpy(img):
     '''
     if isinstance(img, np.ndarray):
         return img
+    # Convert to channel-last
     if isinstance(img, torch.Tensor):
         return img.detach().cpu().permute(1, 2, 0).numpy()
     if isinstance(img, PIL.Image.Image):
         return np.asarray(img).copy()
+    return None
+
+
+def to_tensor(img):
+    '''
+    Convert the given image to the PyTorch format
+    '''
+    if isinstance(img, torch.Tensor):
+        return img
+    # Convert to channel-first
+    if isinstance(img, np.ndarray):
+        return torch.from_numpy(img).permute(2, 0, 1)
+    if isinstance(img, PIL.Image.Image):
+        return torch.from_numpy(np.asarray(img).copy()).permute(2, 0, 1)
     return None
 
 

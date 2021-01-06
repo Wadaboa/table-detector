@@ -28,9 +28,7 @@ batch_size: 2
 workers: 4
 # Where should data be processed
 device: cpu
-input_size:
-  width: 224
-  height: 224
+
 # What ImageNet backbone to use
 backbone:
   # Family of the backbone
@@ -41,20 +39,38 @@ backbone:
   type: mobilenet_v2
   # If pretrained or not
   pretrained: True
+  # Desired input size
+  # (check backbones.py to see minimum sizes for each model)
+  input_size:
+    width: 224
+    height: 224
+
 # What model to use for table detection
 detector:
   # Actual detector to use
   # Types: rcnn, fast_rcnn, faster_rcnn
-  type: fast_rcnn
+  type: faster_rcnn
+  # R-CNN configuration
   rcnn:
+    # Number of maximum selective search proposals per image
     num_proposals: 2000
+    # Selective search strategy
+    # Types: fast, quality
     ss_type: fast
+  # Fast R-CNN configuration
   fast_rcnn:
+    # Number of maximum selective search proposals per image
     num_proposals: 2000
+    # Selective search strategy
+    # Types: fast, quality
     ss_type: fast
+    # ROI pooling layer configuration
     roi_pool:
+      # ROI pooling layer output size
       output_size:
+        # ROI pooling layer output height
         height: 7
+        # ROI pooling layer output width
         width: 7
 
 # What optimizer to use for gradient descent
