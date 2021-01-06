@@ -26,20 +26,20 @@ def get_dataset(params):
     Return an instance of the dataset specified in the given parameters,
     splitted into training and test sets
     '''
-    dataset_type = params.train_dataset
+    dataset_type = params.dataset.train
     dataset = DATASETS[dataset_type](
-        roots=params.datasets.__dict__[dataset_type].path,
+        roots=params.dataset.__dict__[dataset_type].path,
         # transforms=torchvision.transforms.Compose([
         #    transforms.Resize(
         #        (params.input_size.height, params.input_size.width)
         #    )
         # ])
     )
-    if params.dummy.enabled:
+    if params.dataset.dummy.enabled:
         dataset = torch.utils.data.Subset(
-            dataset, list(range(params.dummy.size))
+            dataset, list(range(params.dataset.dummy.size))
         )
-    train_size = int(params.train_split * len(dataset))
+    train_size = int(params.training.train_split * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(
         dataset, [train_size, test_size]
@@ -52,7 +52,7 @@ def train(params):
     Train a model with the specified parameters
     '''
     # Fix the random seed
-    utils.fix_random(params.random_seed)
+    utils.fix_random(params.generic.random_seed)
 
     # Define datasets
     train_dataset, test_dataset = get_dataset(params)
@@ -61,22 +61,24 @@ def train(params):
     train_sampler = torch.utils.data.RandomSampler(train_dataset)
     test_sampler = torch.utils.data.SequentialSampler(test_dataset)
     train_batch_sampler = torch.utils.data.BatchSampler(
-        train_sampler, params.batch_size, drop_last=True
+        train_sampler, params.training.batch_size, drop_last=True
     )
 
     # Define data loaders
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_sampler=train_batch_sampler,
-        num_workers=params.workers, collate_fn=learning_utils.collate_fn
+        num_workers=params.generic.workers,
+        collate_fn=learning_utils.collate_fn
     )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset, batch_size=1, sampler=test_sampler,
-        num_workers=params.workers, collate_fn=learning_utils.collate_fn
+        num_workers=params.generic.workers,
+        collate_fn=learning_utils.collate_fn
     )
 
     # Get the object detector
     detector = detectors.get_detector(params, NUM_CLASSES)
-    detector.to(params.device)
+    detector.to(params.generic.device)
 
     # Define the optimizer
     optimizer_type = params.optimizers.type

@@ -181,11 +181,11 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     )
     header = 'Epoch: [{}]'.format(epoch)
 
-    for images, targets in metric_logger.log_every(dataloader, params.log_interval, header):
-        #images = torch.stack(images).to(params.device)
-        images = list(image.to(params.device) for image in images)
+    for images, targets in metric_logger.log_every(dataloader, params.training.log_interval, header):
+        #images = torch.stack(images).to(params.generic.device)
+        images = list(image.to(params.generic.device) for image in images)
         targets = [
-            {k: v.to(params.device) for k, v in t.items()} for t in targets
+            {k: v.to(params.generic.device) for k, v in t.items()} for t in targets
         ]
 
         loss_dict = model(images, targets)
@@ -211,7 +211,7 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
 def training_loop(params, model, optimizer, train_dataloader,
                   val_dataloader, lr_scheduler=None):
     start_time = time.time()
-    for epoch in range(1, params.epochs + 1):
+    for epoch in range(1, params.training.epochs + 1):
         train_one_epoch(params, model, optimizer, train_dataloader, epoch)
         if lr_scheduler is not None:
             lr_scheduler.step()

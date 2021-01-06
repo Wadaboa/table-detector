@@ -1,33 +1,43 @@
-datasets:
+# Datasets configuration
+dataset:
+  # Dataset to use for training
+  train: marmot
+  # Dataset to use for validation
+  val: marmot
+  # Use a small slice of data to debug
+  dummy:
+    # Enable or disable
+    enabled: True
+    # Number of examples to use
+    size: 10
+  # Marmot dataset configuration
   marmot:
+    # Path to Marmot examples
     path:
       - datasets/marmot/table_recognition/data/english/positive
       #- datasets/marmot/table_recognition/data/english/negative
       #- datasets/marmot/table_recognition/data/chinese/positive
       #- datasets/marmot/table_recognition/data/chinese/negative
 
-train_dataset: marmot
-val_dataset: marmot
-# Random seed for all the randomness sources
-random_seed: 42
-# Use a small slice of data to debug
-dummy:
-  # Enable or disable
-  enabled: True
-  # Number of examples to use
-  size: 10
-# How much data to use for training
-train_split: !!float 0.8
-# Number of training epochs
-epochs: 10
-# How often to print and log metrics
-log_interval: 1
-# Batch size
-batch_size: 2
-# Number of data loading workers
-workers: 4
-# Where should data be processed
-device: cpu
+# Generic configuration
+generic:
+  # Random seed for all the randomness sources
+  random_seed: 42
+  # Number of data loading workers
+  workers: 4
+  # Where should data be processed
+  device: cpu
+
+# Training configuration
+training:
+  # How much data to use for training
+  train_split: !!float 0.8
+  # Number of training epochs
+  epochs: 10
+  # How often to print and log metrics
+  log_interval: 1
+  # Batch size
+  batch_size: 2
 
 # What ImageNet backbone to use
 backbone:
@@ -42,14 +52,34 @@ backbone:
   # Desired input size
   # (check backbones.py to see minimum sizes for each model)
   input_size:
+    # Backbone input width
     width: 224
+    # Backbone input height
     height: 224
 
 # What model to use for table detection
 detector:
   # Actual detector to use
   # Types: rcnn, fast_rcnn, faster_rcnn
-  type: faster_rcnn
+  type: fast_rcnn
+
+  # Standard region proposals configuration
+  region_proposals:
+    # Region proposal algorithm
+    type: edge_boxes
+    # Number of maximum proposals per image
+    num_proposals: 2000
+    # Selective search configuration
+    selective_search:
+      # Selective search strategy
+      # Types: fast, quality
+      strategy: fast
+    # Edge boxes configuration
+    edge_boxes:
+      # Path to the edge boxes model
+      # (https://github.com/opencv/opencv_extra/blob/master/testdata/cv/ximgproc/model.yml.gz)
+      model_path: models/edge_boxes.gz
+
   # R-CNN configuration
   rcnn:
     # Number of maximum selective search proposals per image
@@ -57,6 +87,7 @@ detector:
     # Selective search strategy
     # Types: fast, quality
     ss_type: fast
+
   # Fast R-CNN configuration
   fast_rcnn:
     # Number of maximum selective search proposals per image
