@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional as TF
+from torchvision.models.detection.roi_heads import fastrcnn_loss
 
 import backbones
 import utils
@@ -58,10 +59,14 @@ class RCNN(nn.Module):
             self.backbone.out_size, self.num_classes * 4
         )
 
+        # Loss criterions
+        self.class_score_criterion = nn.CrossEntropyLoss()
+        self.bbox_correction_criterion = nn.MSELoss()
+
     def edge_boxes(self, img):
         '''
-        C. L. Zitnick and P. Dollar, 
-        “Edge boxes: Locating object proposals from edges”, 
+        C. L. Zitnick and P. Dollar,
+        “Edge boxes: Locating object proposals from edges”,
         European Conference on Computer Vision (ECCV), 2014.
         '''
         edges = self.proposals_model.detectEdges(np.float32(img) / 255.0)
@@ -74,8 +79,8 @@ class RCNN(nn.Module):
 
     def selective_search(self, img):
         '''
-        J. R. Uijlings, K. E. van de Sande, T. Gevers, and A. W. Smeulders, 
-        “Selective search for object recognition,” 
+        J. R. Uijlings, K. E. van de Sande, T. Gevers, and A. W. Smeulders,
+        “Selective search for object recognition,”
         International Journal of Computer Vision (IJCV), 2013
         '''
         # Set base image
@@ -123,10 +128,10 @@ class RCNN(nn.Module):
         # and warp them to be compatible with the chosen backbone
         proposals = torch.zeros(
             (self.num_proposals, 3, self.backbone.in_height, self.backbone.in_width),
-            dtype=torch.uint8, device=self.device
+            dtype=torch.float32, device=self.device
         )
         boxes_coords = torch.zeros(
-            (self.num_proposals, 4), dtype=torch.uint8, device=self.device
+            (self.num_proposals, 4), dtype=torch.float32, device=self.device
         )
         for i, box in enumerate(boxes):
             proposal = img[:, box[1]:box[1] + box[3], box[0]:box[0] + box[2]]
@@ -140,7 +145,83 @@ class RCNN(nn.Module):
                 [box[0], box[1], box[0] + box[2], box[1] + box[3]]
             )
 
-        return proposals, boxes_coords
+        return len(boxes), proposals, boxes_coords
+
+    def compute_loss(self, num_proposals, boxes_coords, class_scores, bbox_corrections, targets):
+        '''
+        Compute one loss for the classification head and one
+        for the bounding box regression head
+        '''
+        class_labels, bbox_predictions, bbox_ground_truths = [], [], []
+        boxes = targets["boxes"].cpu().numpy()
+
+        # Iterate only over the number of computed proposals
+        for i in range(num_proposals):
+
+            # Get the actual proposal coordinates
+            box = boxes_coords[i].cpu().numpy()
+
+            # Set the default value for the classification label
+            # as the background label
+            class_label = 0
+
+            # Compute the most overlapping ground truth bounding box
+            best_match = utils.most_overlapping_box(box, boxes, 0.5)
+
+            # If not background
+            if best_match is not None:
+
+                # Store the actual classification label
+                # associated to the ground truth box
+                gt_index, gt, _ = best_match
+                class_label = targets["labels"][gt_index]
+
+                # Compute proposal and ground truth width and height
+                box_width = box[2] - box[0]
+                box_height = box[3] - box[1]
+                gt_width = gt[2] - gt[0]
+                gt_height = gt[3] - gt[1]
+
+                # Compute the output box, considering the network corrections
+                output_box = torch.tensor([
+                    box[0] + box_width * bbox_corrections[i, 0],
+                    box[1] + box_height * bbox_corrections[i, 1],
+                    box_width * torch.exp(bbox_corrections[i, 2]),
+                    box_height * torch.exp(bbox_corrections[i, 3])
+                ])
+
+                # Compute the regression head target
+                regression_target = torch.tensor([
+                    (gt[0] - box[0]) / box_width,
+                    (gt[1] - box[1]) / box_height,
+                    torch.log(gt_width / box_width),
+                    torch.log(gt_height / box_height)
+                ])
+
+                print(output_box, regression_target)
+
+                # Store output box vs regression head target
+                bbox_predictions.append(output_box)
+                bbox_ground_truths.append(regression_target)
+
+            # Store classification head target
+            class_labels.append(class_label)
+
+        print(len(class_labels), class_scores.shape)
+        print(len(bbox_predictions), len(bbox_ground_truths))
+
+        # Return one loss for the classification head and one
+        # for the bounding box regression head
+        return (
+            self.class_score_criterion(
+                torch.argmax(class_scores[:num_proposals, :], axis=1),
+                torch.tensor(class_labels)
+            ),
+            self.bbox_correction_criterion(
+                torch.tensor(bbox_predictions),
+                torch.tensor(bbox_ground_truths)
+            )
+        )
 
     def forward(self, images, targets=None):
         '''
@@ -150,25 +231,28 @@ class RCNN(nn.Module):
            (input is the output of backbone)
         '''
         assert isinstance(images, list) and len(images[0].shape) == 3
-        class_scores = torch.zeros(
-            (len(images), self.num_proposals, self.num_classes),
-            dtype=torch.float, device=self.device
-        )
-        bbox_corrections = torch.zeros(
-            (len(images), self.num_proposals, self.num_classes * 4),
-            dtype=torch.float, device=self.device
-        )
+        loss_dict = {'loss_classifier': 0, 'loss_box_reg': 0}
+
         for i, img in enumerate(images):
-            proposals, _ = self.region_proposals(img)
+            # Compute predictions
+            num_proposals, proposals, boxes_coords = self.region_proposals(img)
             normalized_proposals = utils.normalize_image(proposals)
             standardized_proposals = utils.standardize_image(
                 normalized_proposals
             )
             features = self.backbone(standardized_proposals)
             flattened_features = torch.flatten(features, start_dim=1)
-            class_scores[i] = self.class_score(flattened_features)
-            bbox_corrections[i] = self.bbox_correction(flattened_features)
-        return class_scores, bbox_corrections
+            class_scores = self.class_score(flattened_features)
+            bbox_corrections = self.bbox_correction(flattened_features)
+
+            # Compute losses
+            loss_classifier, loss_box_reg = self.compute_loss(
+                num_proposals, boxes_coords, class_scores, bbox_corrections, targets[i]
+            )
+            loss_dict['loss_classifier'] += loss_classifier
+            loss_dict['loss_box_reg'] += loss_box_reg
+
+        return loss_dict
 
 
 class FastRCNN(RCNN):
@@ -178,6 +262,8 @@ class FastRCNN(RCNN):
 
     def __init__(self, params, num_classes):
         super(FastRCNN, self).__init__(params, num_classes)
+
+        # ROI pooling configuration
         self.roi_pool_output_size = (
             self.backbone.out_height, self.backbone.out_width
         )
@@ -188,6 +274,9 @@ class FastRCNN(RCNN):
             self.roi_pool_output_size, self.roi_pool_spatial_scale
         )
 
+        # Loss criterions
+        self.bbox_correction_criterion = nn.SmoothL1Loss()
+
     def forward(self, images, targets=None):
         '''
         1. Region proposals for the each image
@@ -197,26 +286,31 @@ class FastRCNN(RCNN):
            (input is the output of ROI pool)
         '''
         assert isinstance(images, list) and len(images[0].shape) == 3
-        class_scores = torch.zeros(
-            (len(images), self.num_proposals, self.num_classes),
-            dtype=torch.float, device=self.device
-        )
-        bbox_corrections = torch.zeros(
-            (len(images), self.num_proposals, self.num_classes * 4),
-            dtype=torch.float, device=self.device
-        )
+        loss_dict = {'loss_classifier': 0, 'loss_box_reg': 0}
+
         for i, img in enumerate(images):
+            # Compute predictions
             warped_image = TF.resize(
                 img, (self.backbone.in_height, self.backbone.in_width)
             )
             standardized_image = utils.standardize_image(warped_image)
             features = self.backbone(standardized_image.unsqueeze(0))
-            _, boxes_coords = self.region_proposals(warped_image)
-            rescaled_features = self.roi_pool(features, [boxes_coords.float()])
+            num_proposals, _, boxes_coords = self.region_proposals(
+                warped_image
+            )
+            rescaled_features = self.roi_pool(features, [boxes_coords])
             flattened_features = torch.flatten(rescaled_features, start_dim=1)
-            class_scores[i] = self.class_score(flattened_features)
-            bbox_corrections[i] = self.bbox_correction(flattened_features)
-        return class_scores, bbox_corrections
+            class_scores = self.class_score(flattened_features)
+            bbox_corrections = self.bbox_correction(flattened_features)
+
+            # Compute losses
+            loss_classifier, loss_box_reg = self.compute_loss(
+                num_proposals, boxes_coords, class_scores, bbox_corrections, targets[i]
+            )
+            loss_dict['loss_classifier'] += loss_classifier
+            loss_dict['loss_box_reg'] += loss_box_reg
+
+        return loss_dict
 
 
 class FasterRCNN(nn.Module):
@@ -244,8 +338,7 @@ class FasterRCNN(nn.Module):
             sampling_ratio=-1
         )
 
-        # Define the anchors generator
-        # Notes:
+        # Define the anchors generator:
         # - Sizes `s` and aspect ratios `r` should have the same number of elements, and it should
         #   correspond to the number of feature maps (without FPN we only have 1 feature map)
         # - Sizes and aspect ratios for one feature map can have an arbitrary number of elements,

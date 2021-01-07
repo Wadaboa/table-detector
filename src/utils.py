@@ -104,14 +104,99 @@ def get_image_size(img):
     return None
 
 
+def check_box_coords(box):
+    '''
+    Check that the coordinates of the given box are in
+    the format (x1, y1, x2, y2) and that it is not degenerate
+    '''
+    assert box[0] <= box[2] and box[1] <= box[3], (
+        "Found invalid box coordinates: "
+        f"{box} not in (x1, y1, x2, y2) format"
+    )
+
+
+def box_area(box):
+    '''
+    Return the area of a bounding box, where the box
+    should have the (x1, y1, x2, y2) format
+    '''
+    check_box_coords(box)
+    return (box[2] - box[0]) * (box[3] - box[1])
+
+
 def box_to_mask(img, box, mask_value=1):
     '''
     Convert a bounding box to a mask image,
     where the box is a list or tuple like (x1, y1, x2, y2)
     '''
+    check_box_coords(box)
     mask = np.zeros(img.shape, np.dtype('uint8'))
     mask[box[1]:box[3], box[0]:box[2], :] = mask_value
     return np.array(mask, dtype=np.float32)
+
+
+def overlap_area(first_box, second_box):
+    '''
+    Return the area of overlap between two bounding boxes,
+    with coords (x1, y1, x2, y2)
+    '''
+    check_box_coords(first_box)
+    check_box_coords(second_box)
+
+    # Get keypoints
+    x_left = max(first_box[0], second_box[0])
+    y_top = max(first_box[1], second_box[1])
+    x_right = min(first_box[2], second_box[2])
+    y_bottom = min(first_box[3], second_box[3])
+
+    # No intersection found
+    if x_right < x_left or y_bottom < y_top:
+        return 0.0
+
+    # Found intersection
+    return box_area([x_left, y_top, x_right, y_bottom])
+
+
+def get_iou(first_box, second_box):
+    '''
+    Calculate the Intersection over Union (IoU) of two bounding boxes,
+    with coords (x1, y1, x2, y2)
+    '''
+    # Compute intersection and areas
+    intersection_area = overlap_area(first_box, second_box)
+    first_box_area = box_area(first_box)
+    second_box_area = box_area(second_box)
+
+    # Compute IoU by taking the intersection area and dividing it
+    # by the sum of the boxes areas minus their intersection area
+    iou = (
+        intersection_area /
+        float(first_box_area + second_box_area - intersection_area)
+    )
+    assert iou >= 0.0 and iou <= 1.0, (
+        f"Invalid IoU value of {iou}"
+    )
+
+    return iou
+
+
+def most_overlapping_box(box, boxes, min_iou):
+    '''
+    Return the rectangle that has the most overlap with
+    the ones in boxes
+    '''
+    results = []
+    for i, other_box in enumerate(boxes):
+        iou = get_iou(box, other_box)
+        if iou > min_iou:
+            results.append((i, other_box, iou))
+
+    # At least one good match
+    if len(results) > 0:
+        return max(results, key=lambda t: t[1])
+
+    # No good match
+    return None
 
 
 def freeze_module(module):
@@ -173,7 +258,7 @@ def denormalize_image(img, max_value=255):
     assert img.max() <= 1, (
         "The input image is not normalized, cannot denormalize"
     )
-    return (img.float() / float(max_value)).uint8()
+    return (img.float() * float(max_value)).type(torch.uint8)
 
 
 def flatten(a):
