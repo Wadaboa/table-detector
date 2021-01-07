@@ -183,7 +183,7 @@ class MarmotTableRecognitionDataset(Dataset):
         target = {}
         target["boxes"] = t_boxes
         target["labels"] = torch.ones((len(boxes),), dtype=torch.int64)
-        target["masks"] = torch.tensor(masks, dtype=torch.int64)
+        target["masks"] = torch.tensor(masks, dtype=torch.float32)
         target["image_id"] = torch.tensor([index])
         target["image_shape"] = torch.tensor(cv_img.shape, dtype=torch.int64)
         target["area"] = (
@@ -197,8 +197,8 @@ class MarmotTableRecognitionDataset(Dataset):
             img = self.transforms(img)
             target = self.transforms(target)
 
-        # Ensure that the image is a PyTorch tensor
-        img = utils.to_tensor(img)
+        # Ensure that the image is a normalized PyTorch tensor
+        img = utils.normalize_image(utils.to_tensor(img))
         return [(img, target)]
 
     def __len__(self):
@@ -360,7 +360,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
             target["labels"] = torch.ones(
                 (len(boxes_in_page),), dtype=torch.int64
             )
-            target["masks"] = torch.tensor(masks, dtype=torch.int64)
+            target["masks"] = torch.tensor(masks, dtype=torch.float32)
             target["image_id"] = torch.tensor([index])
             target["image_shape"] = torch.tensor(
                 cv_img.shape, dtype=torch.int64
@@ -378,8 +378,8 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 img = self.transforms(img)
                 target = self.transforms(target)
 
-            # Ensure that the image is a PyTorch tensor
-            img = utils.to_tensor(img)
+            # Ensure that the image is a normalized PyTorch tensor
+            img = utils.normalize_image(utils.to_tensor(img))
             res.append((img, target))
 
         return res

@@ -98,6 +98,9 @@ class RCNN(nn.Module):
         Use OpenCV to obtain a list of bounding box proposals
         to pass to the backbone
         '''
+        assert isinstance(img, torch.Tensor), (
+            "The input image for region proposals should be a PyTorch tensor"
+        )
         assert len(img.shape) == 3, (
             "Proposals can only be computed on one image at a time"
         )
@@ -109,7 +112,8 @@ class RCNN(nn.Module):
         cv2.setUseOptimized(True)
 
         # Convert the image to numpy RGB format
-        np_img = utils.to_numpy(img)
+        norm_img = utils.denormalize_image(img)
+        np_img = utils.to_numpy(norm_img)
         rgb_img = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
 
         # Call the specified region proposals model
@@ -156,7 +160,11 @@ class RCNN(nn.Module):
         )
         for i, img in enumerate(images):
             proposals, _ = self.region_proposals(img)
-            features = self.backbone(proposals)
+            normalized_proposals = utils.normalize_image(proposals)
+            standardized_proposals = utils.standardize_image(
+                normalized_proposals
+            )
+            features = self.backbone(standardized_proposals)
             flattened_features = torch.flatten(features, start_dim=1)
             class_scores[i] = self.class_score(flattened_features)
             bbox_corrections[i] = self.bbox_correction(flattened_features)
@@ -170,7 +178,6 @@ class FastRCNN(RCNN):
 
     def __init__(self, params, num_classes):
         super(FastRCNN, self).__init__(params, num_classes)
-        print(self.backbone)
         self.roi_pool_output_size = (
             self.backbone.out_height, self.backbone.out_width
         )
@@ -202,7 +209,8 @@ class FastRCNN(RCNN):
             warped_image = TF.resize(
                 img, (self.backbone.in_height, self.backbone.in_width)
             )
-            features = self.backbone(warped_image.float().unsqueeze(0))
+            standardized_image = utils.standardize_image(warped_image)
+            features = self.backbone(standardized_image.unsqueeze(0))
             _, boxes_coords = self.region_proposals(warped_image)
             rescaled_features = self.roi_pool(features, [boxes_coords.float()])
             flattened_features = torch.flatten(rescaled_features, start_dim=1)
@@ -212,6 +220,9 @@ class FastRCNN(RCNN):
 
 
 class FasterRCNN(nn.Module):
+    '''
+    Faster R-CNN (without FPN) PyTorch module
+    '''
 
     def __init__(self, params, num_classes):
         super(FasterRCNN, self).__init__()
@@ -219,30 +230,60 @@ class FasterRCNN(nn.Module):
         self.num_classes = num_classes
         self.device = params.generic.device
 
-        # Get backbone and Faster-RCNN model
+        # Get backbone
         self.backbone = backbones.Backbone(params)
-        print(self.backbone.out_height, self.backbone.out_width,
-              self.backbone.out_channels)
-        anchor_sizes = ((4,), (8,), (16,), (32,), (64,), (128,))
-        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+
+        # Define ROI pooling
+        self.roi_pool_output_size = (
+            self.backbone.out_height, self.backbone.out_width
+        )
+        self.featmap_names = ['0']
+        roi_pool = torchvision.ops.MultiScaleRoIAlign(
+            featmap_names=self.featmap_names,
+            output_size=self.roi_pool_output_size,
+            sampling_ratio=-1
+        )
+
+        # Define the anchors generator
+        # Notes:
+        # - Sizes `s` and aspect ratios `r` should have the same number of elements, and it should
+        #   correspond to the number of feature maps (without FPN we only have 1 feature map)
+        # - Sizes and aspect ratios for one feature map can have an arbitrary number of elements,
+        #   and the anchors generator will output a set of `s[i] * r[i]` anchors
+        #   per spatial location for feature map `i`
+        anchor_sizes = tuple([
+            tuple(params.detector.faster_rcnn.anchors.sizes) *
+            len(self.featmap_names)
+        ])
+        aspect_ratios = tuple([
+            tuple(params.detector.faster_rcnn.anchors.ratios) *
+            len(self.featmap_names)
+        ])
         anchor_generator = torchvision.models.detection.rpn.AnchorGenerator(
             anchor_sizes, aspect_ratios
         )
-        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=[0],
-                                                        output_size=7,
-                                                        sampling_ratio=2)
+
+        # Define Faster-RCNN model
         self.faster_rcnn = torchvision.models.detection.faster_rcnn.FasterRCNN(
-            self.backbone, num_classes, rpn_anchor_generator=anchor_generator, box_roi_pool=roi_pooler
+            self.backbone, num_classes, box_roi_pool=roi_pool,
+            rpn_anchor_generator=anchor_generator,
+            image_mean=params.backbone.imagenet_params.mean,
+            image_std=params.backbone.imagenet_params.std,
         )
 
     def forward(self, images, targets=None):
-        print(len(images), images[0].shape)
-        outputs = self.faster_rcnn(
+        '''
+        1. Region proposals for the each image (computed by a RPN), based on anchors
+        2. Backbone for each image
+        3. ROI align layer to crop and warp backbone features according to proposals
+        4. R-CNN prediction head for each proposal in an image
+           (input is the output of ROI align)
+        '''
+        # Returns losses when in training mode and
+        # detections when in evaluation mode
+        return self.faster_rcnn(
             images, targets=targets
         )
-        print(outputs)
-
-        return losses, detections
 
 
 def _get_rcnn(params, num_classes):

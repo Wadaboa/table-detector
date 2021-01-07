@@ -43,10 +43,10 @@ training:
 backbone:
   # Family of the backbone
   # Types: alexnet, densenet, mobilenet, resnet, vgg
-  family: resnet
+  family: mobilenet
   # Actual backbone to use (among the ones in the above family)
   # See https://github.com/pytorch/vision/tree/master/torchvision/models
-  type: resnet50
+  type: mobilenet_v2
   # If pretrained or not
   pretrained: True
   # Desired input size
@@ -56,12 +56,24 @@ backbone:
     width: 224
     # Backbone input height
     height: 224
+  # ImageNet images standard deviation (0-1 range)
+  imagenet_params:
+    # ImageNet images mean
+    mean:
+      - !!float 0.485
+      - !!float 0.456
+      - !!float 0.406
+    # ImageNet images standard deviation
+    std:
+      - !!float 0.229
+      - !!float 0.224
+      - !!float 0.225
 
 # What model to use for table detection
 detector:
   # Actual detector to use
   # Types: rcnn, fast_rcnn, faster_rcnn
-  type: fast_rcnn
+  type: faster_rcnn
 
   # Standard region proposals configuration
   region_proposals:
@@ -80,16 +92,20 @@ detector:
       # (https://github.com/opencv/opencv_extra/blob/master/testdata/cv/ximgproc/model.yml.gz)
       model_path: models/edge_boxes.gz
 
-  # Fast R-CNN configuration
-  fast_rcnn:
-    # ROI pooling layer configuration
-    roi_pool:
-      # ROI pooling layer output size
-      output_size:
-        # ROI pooling layer output height
-        height: 7
-        # ROI pooling layer output width
-        width: 7
+  # Faster R-CNN configuration
+  faster_rcnn:
+    # Anchors generation configuration
+    anchors:
+      # Anchor sizes for one feature map
+      sizes:
+        - 128
+        - 256
+        - 512
+      # Anchors aspect ratios for one feature map
+      ratios:
+        - !!float 0.5
+        - !!float 1.0
+        - !!float 2.0
 
 # What optimizer to use for gradient descent
 optimizers:
