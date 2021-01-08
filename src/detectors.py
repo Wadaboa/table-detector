@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional as TF
-from torchvision.models.detection.roi_heads import fastrcnn_loss
+from torchvision.models.detection.transform import resize_boxes
 
 import backbones
 import utils
@@ -22,6 +22,13 @@ class RCNN(nn.Module):
     R-CNN PyTorch module
     '''
 
+    _SS_STRATEGIES = {
+        "color": cv2.ximgproc.segmentation.createSelectiveSearchSegmentationStrategyColor(),
+        "fill": cv2.ximgproc.segmentation.createSelectiveSearchSegmentationStrategyFill(),
+        "size": cv2.ximgproc.segmentation.createSelectiveSearchSegmentationStrategySize(),
+        "texture": cv2.ximgproc.segmentation.createSelectiveSearchSegmentationStrategyTexture(),
+    }
+
     def __init__(self, params, num_classes):
         super(RCNN, self).__init__()
         self.num_classes = num_classes
@@ -29,23 +36,28 @@ class RCNN(nn.Module):
         self.num_proposals = params.detector.region_proposals.num_proposals
         self.proposals_type = params.detector.region_proposals.type
 
-        # Select region proposals model
+        # Select region proposals model and parameters
         assert self.proposals_type in ("selective_search", "edge_boxes"), (
             "Invalid region proposals type"
         )
+        self.proposals_params = params.detector.region_proposals.__dict__[
+            self.proposals_type
+        ]
         if self.proposals_type == "selective_search":
-            self.selective_search_strategy = params.detector.region_proposals.selective_search.strategy
-            assert self.selective_search_strategy in ("fast", "quality"), (
-                "The given selective search strategy is not supported"
-            )
             self.proposals_model = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+            strategies = utils.get_dict_values(
+                self._SS_STRATEGIES, self.proposals_params.strategies.get_true_keys()
+            )
+            strategies = cv2.ximgproc.segmentation.createSelectiveSearchSegmentationStrategyMultiple(
+                *strategies
+            )
+            self.proposals_model.addStrategy(strategies)
         elif self.proposals_type == "edge_boxes":
-            edge_boxes_model_path = params.detector.region_proposals.edge_boxes.model_path
-            assert os.path.exists(edge_boxes_model_path), (
+            assert os.path.exists(self.proposals_params.model_path), (
                 "The given Edge Boxes model path does not exist"
             )
             self.proposals_model = cv2.ximgproc.createStructuredEdgeDetection(
-                edge_boxes_model_path
+                self.proposals_params.model_path
             )
 
         # Get backbone
@@ -69,11 +81,22 @@ class RCNN(nn.Module):
         “Edge boxes: Locating object proposals from edges”,
         European Conference on Computer Vision (ECCV), 2014.
         '''
+        # Get the edges
         edges = self.proposals_model.detectEdges(np.float32(img) / 255.0)
+
+        # Create an orientation map
         orientation_map = self.proposals_model.computeOrientation(edges)
+
+        # Suppress edges
         edges = self.proposals_model.edgesNms(edges, orientation_map)
+
+        # Create edge boxes
         cv_edge_boxes = cv2.ximgproc.createEdgeBoxes()
         cv_edge_boxes.setMaxBoxes(self.num_proposals)
+        cv_edge_boxes.setAlpha(self.proposals_params.alpha)
+        cv_edge_boxes.setBeta(self.proposals_params.beta)
+
+        # Compute boxes
         boxes, scores = cv_edge_boxes.getBoundingBoxes(edges, orientation_map)
         return boxes
 
@@ -88,17 +111,33 @@ class RCNN(nn.Module):
 
         # Set selective search type
         # Fast but low recall
-        if self.selective_search_strategy == "fast":
+        if self.proposals_params.type == "fast":
             self.proposals_model.switchToSelectiveSearchFast()
         # High recall but slow
-        elif self.selective_search_strategy == "quality":
+        elif self.proposals_params.type == "quality":
             self.proposals_model.switchToSelectiveSearchQuality()
+        else:
+            raise ValueError(
+                "The given selective search type is not supported"
+            )
 
         # Compute proposals and clip them to the maximum
         # number of regions
         return self.proposals_model.process()[:self.num_proposals]
 
-    def region_proposals(self, img):
+    def show_proposals(self, img, proposals, max_proposals=50):
+        '''
+        Draw proposals bounding boxes on the of the given image
+        '''
+        img_out = img.copy()
+        for x, y, w, h in proposals[:max_proposals]:
+            cv2.rectangle(
+                img_out, (x, y), (x + w, y + h),
+                (0, 255, 0), 1, cv2.LINE_AA
+            )
+        utils.show_image(img_out, f"{max_proposals} region proposals")
+
+    def region_proposals(self, img, optim=True, show=False):
         '''
         Use OpenCV to obtain a list of bounding box proposals
         to pass to the backbone
@@ -114,7 +153,7 @@ class RCNN(nn.Module):
         )
 
         # Set the optimized flag for OpenCV
-        cv2.setUseOptimized(True)
+        cv2.setUseOptimized(optim)
 
         # Convert the image to numpy RGB format
         norm_img = utils.denormalize_image(img)
@@ -124,42 +163,49 @@ class RCNN(nn.Module):
         # Call the specified region proposals model
         boxes = getattr(self, self.proposals_type)(rgb_img)
 
+        # Show proposals
+        if show:
+            self.show_proposals(rgb_img, boxes)
+
         # Compute boxes, extract the corresponding proposals
         # and warp them to be compatible with the chosen backbone
         proposals = torch.zeros(
             (self.num_proposals, 3, self.backbone.in_height, self.backbone.in_width),
             dtype=torch.float32, device=self.device
         )
-        boxes_coords = torch.zeros(
+        coords = torch.zeros(
             (self.num_proposals, 4), dtype=torch.float32, device=self.device
         )
         for i, box in enumerate(boxes):
-            proposal = img[:, box[1]:box[1] + box[3], box[0]:box[0] + box[2]]
-            assert all(proposal.shape) != 0, (
-                "A region proposal box has wrong shape"
+            box_coords = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+            warped_proposal, x_scale, y_scale = utils.warp_with_context(
+                img, box_coords,
+                (self.backbone.in_height, self.backbone.in_width)
             )
-            proposals[i] = TF.resize(
-                proposal, (self.backbone.in_height, self.backbone.in_width)
-            )
-            boxes_coords[i] = torch.tensor(
-                [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+            proposals[i] = utils.to_tensor(warped_proposal)
+            coords[i] = torch.tensor(
+                utils.scale_box(box_coords, x_scale=x_scale, y_scale=y_scale)
             )
 
-        return len(boxes), proposals, boxes_coords
+        return len(boxes), proposals, coords
 
-    def compute_loss(self, num_proposals, boxes_coords, class_scores, bbox_corrections, targets):
+    def compute_loss(self, num_proposals, boxes_coords,
+                     class_scores, bbox_corrections, targets):
         '''
         Compute one loss for the classification head and one
         for the bounding box regression head
         '''
         class_labels, bbox_predictions, bbox_ground_truths = [], [], []
-        boxes = targets["boxes"].cpu().numpy()
+        boxes = resize_boxes(
+            targets["boxes"], targets["image_shape"][:-1],
+            (self.backbone.in_height, self.backbone.in_width)
+        )
 
         # Iterate only over the number of computed proposals
         for i in range(num_proposals):
 
             # Get the actual proposal coordinates
-            box = boxes_coords[i].cpu().numpy()
+            box = boxes_coords[i].cpu().tolist()
 
             # Set the default value for the classification label
             # as the background label
@@ -235,7 +281,9 @@ class RCNN(nn.Module):
 
         for i, img in enumerate(images):
             # Compute predictions
-            num_proposals, proposals, boxes_coords = self.region_proposals(img)
+            num_proposals, proposals, proposals_coords = self.region_proposals(
+                img
+            )
             normalized_proposals = utils.normalize_image(proposals)
             standardized_proposals = utils.standardize_image(
                 normalized_proposals
@@ -247,7 +295,8 @@ class RCNN(nn.Module):
 
             # Compute losses
             loss_classifier, loss_box_reg = self.compute_loss(
-                num_proposals, boxes_coords, class_scores, bbox_corrections, targets[i]
+                num_proposals, proposals_coords, class_scores,
+                bbox_corrections, targets[i]
             )
             loss_dict['loss_classifier'] += loss_classifier
             loss_dict['loss_box_reg'] += loss_box_reg
@@ -295,17 +344,18 @@ class FastRCNN(RCNN):
             )
             standardized_image = utils.standardize_image(warped_image)
             features = self.backbone(standardized_image.unsqueeze(0))
-            num_proposals, _, boxes_coords = self.region_proposals(
+            num_proposals, _, proposals_coords = self.region_proposals(
                 warped_image
             )
-            rescaled_features = self.roi_pool(features, [boxes_coords])
+            rescaled_features = self.roi_pool(features, [proposals_coords])
             flattened_features = torch.flatten(rescaled_features, start_dim=1)
             class_scores = self.class_score(flattened_features)
             bbox_corrections = self.bbox_correction(flattened_features)
 
             # Compute losses
             loss_classifier, loss_box_reg = self.compute_loss(
-                num_proposals, boxes_coords, class_scores, bbox_corrections, targets[i]
+                num_proposals, proposals_coords,
+                class_scores, bbox_corrections, targets[i]
             )
             loss_dict['loss_classifier'] += loss_classifier
             loss_dict['loss_box_reg'] += loss_box_reg

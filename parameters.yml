@@ -83,14 +83,28 @@ detector:
     num_proposals: 2000
     # Selective search configuration
     selective_search:
-      # Selective search strategy
+      # Selective search type
       # Types: fast, quality
-      strategy: fast
+      type: quality
+      # Selective search strategies
+      strategies:
+        # Color strategy
+        color: True
+        # Fill strategy
+        fill: True
+        # Size strategy
+        size: True
+        # Texture strategy
+        texture: True
     # Edge boxes configuration
     edge_boxes:
       # Path to the edge boxes model
       # (https://github.com/opencv/opencv_extra/blob/master/testdata/cv/ximgproc/model.yml.gz)
       model_path: models/edge_boxes.gz
+      # Step size of sliding window search
+      alpha: !!float 0.65
+      # NMS threshold for object proposal
+      beta: !!float 0.75
 
   # Faster R-CNN configuration
   faster_rcnn:
