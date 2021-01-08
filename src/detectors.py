@@ -193,19 +193,20 @@ class RCNN(nn.Module):
                      class_scores, bbox_corrections, targets):
         '''
         Compute one loss for the classification head and one
-        for the bounding box regression head
+        for the bounding box regression head and also return outputs
         '''
         class_labels, bbox_predictions, bbox_ground_truths = [], [], []
         boxes = resize_boxes(
             targets["boxes"], targets["image_shape"][:-1],
             (self.backbone.in_height, self.backbone.in_width)
         )
+        outputs = []
 
         # Iterate only over the number of computed proposals
         for i in range(num_proposals):
 
             # Get the actual proposal coordinates
-            box = boxes_coords[i].cpu().tolist()
+            box = boxes_coords[i]
 
             # Set the default value for the classification label
             # as the background label
@@ -230,10 +231,10 @@ class RCNN(nn.Module):
 
                 # Compute the output box, considering the network corrections
                 output_box = torch.tensor([
-                    box[0] + box_width * bbox_corrections[i, 0],
-                    box[1] + box_height * bbox_corrections[i, 1],
-                    box_width * torch.exp(bbox_corrections[i, 2]),
-                    box_height * torch.exp(bbox_corrections[i, 3])
+                    box[0] + box_width * bbox_corrections[i, class_label, 0],
+                    box[1] + box_height * bbox_corrections[i, class_label, 1],
+                    box_width * torch.exp(bbox_corrections[i, class_label, 2]),
+                    box_height * torch.exp(bbox_corrections[i, class_label, 3])
                 ])
 
                 # Compute the regression head target
@@ -244,30 +245,29 @@ class RCNN(nn.Module):
                     torch.log(gt_height / box_height)
                 ])
 
-                print(output_box, regression_target)
-
-                # Store output box vs regression head target
-                bbox_predictions.append(output_box)
+                # Store predicted box correction vs regression head target
+                bbox_predictions.append(bbox_corrections[i, class_label])
                 bbox_ground_truths.append(regression_target)
+
+                # Store outputs
+                predicted_label = torch.argmax(class_scores[i])
+                outputs.append((predicted_label, output_box))
 
             # Store classification head target
             class_labels.append(class_label)
 
-        print(len(class_labels), class_scores.shape)
-        print(len(bbox_predictions), len(bbox_ground_truths))
-
-        # Return one loss for the classification head and one
+        # Compute one loss for the classification head and one
         # for the bounding box regression head
-        return (
-            self.class_score_criterion(
-                torch.argmax(class_scores[:num_proposals, :], axis=1),
-                torch.tensor(class_labels)
-            ),
-            self.bbox_correction_criterion(
-                torch.tensor(bbox_predictions),
-                torch.tensor(bbox_ground_truths)
-            )
+        loss_classifier = self.class_score_criterion(
+            class_scores[:num_proposals, :],
+            torch.tensor(class_labels)
         )
+        loss_box_reg = self.bbox_correction_criterion(
+            torch.stack(bbox_predictions),
+            torch.stack(bbox_ground_truths)
+        )
+
+        return loss_classifier, loss_box_reg, outputs
 
     def forward(self, images, targets=None):
         '''
@@ -291,10 +291,12 @@ class RCNN(nn.Module):
             features = self.backbone(standardized_proposals)
             flattened_features = torch.flatten(features, start_dim=1)
             class_scores = self.class_score(flattened_features)
-            bbox_corrections = self.bbox_correction(flattened_features)
+            bbox_corrections = self.bbox_correction(flattened_features).reshape(
+                self.num_proposals, self.num_classes, 4
+            )
 
             # Compute losses
-            loss_classifier, loss_box_reg = self.compute_loss(
+            loss_classifier, loss_box_reg, _ = self.compute_loss(
                 num_proposals, proposals_coords, class_scores,
                 bbox_corrections, targets[i]
             )
@@ -350,10 +352,12 @@ class FastRCNN(RCNN):
             rescaled_features = self.roi_pool(features, [proposals_coords])
             flattened_features = torch.flatten(rescaled_features, start_dim=1)
             class_scores = self.class_score(flattened_features)
-            bbox_corrections = self.bbox_correction(flattened_features)
+            bbox_corrections = self.bbox_correction(flattened_features).reshape(
+                self.num_proposals, self.num_classes, 4
+            )
 
             # Compute losses
-            loss_classifier, loss_box_reg = self.compute_loss(
+            loss_classifier, loss_box_reg, _ = self.compute_loss(
                 num_proposals, proposals_coords,
                 class_scores, bbox_corrections, targets[i]
             )

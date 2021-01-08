@@ -192,10 +192,8 @@ def most_overlapping_box(box, boxes, min_iou):
     the ones in boxes
     '''
     results = []
-    print(boxes)
     for i, other_box in enumerate(boxes):
         iou = get_iou(box, other_box)
-        print(box, other_box, iou)
         if iou > min_iou:
             results.append((i, other_box, iou))
 
@@ -212,28 +210,21 @@ def extract_patch(img, center_index, patch_shape, pad=0):
     Extract a patch of the given shape from the given numpy image, centered around
     the specified position and pad external values with the given fill value
     '''
-    # Patch is entirely contained in the given matrix
-    m, n, channels = img.shape
+    m, n, _ = img.shape
     wm, wn = patch_shape
-    y_offset, x_offset = wm // 2, wn // 2
-    yl, yu = center_index[0] - y_offset, center_index[0] + y_offset
-    xl, xu = center_index[1] - x_offset, center_index[1] + x_offset
-    print(yl, yu, xl, xu, m, n, center_index, x_offset, y_offset)
+    y_pad, x_pad = wm // 2, wn // 2
+    yl, yu = center_index[0] - y_pad, center_index[0] + y_pad
+    xl, xu = center_index[1] - x_pad, center_index[1] + x_pad
     if xl >= 0 and xu < n and yl >= 0 and yu < m:
-        return np.array(img[yl: yu + 1, xl:xu + 1, :], dtype=img.dtype)
+        return np.array(img[yl:yu + 1, xl:xu + 1, :], dtype=img.dtype)
 
-    # Patch has to be padded
-    patch = np.full((wm, wn, channels), pad, dtype=img.dtype)
-    c_yl, c_yu = np.clip(yl, 0, m), np.clip(yu, 0, m)
-    c_xl, c_xu = np.clip(xl, 0, n), np.clip(xu, 0, n)
-    sub = img[c_yl: c_yu + 1, c_xl:c_xu + 1, :]
-    w_yl = 0 if yl >= 0 else abs(yl)
-    w_yu = wm if yu < m else wm - (yu - m) - 1
-    w_xl = 0 if xl >= 0 else abs(xl)
-    w_xu = wn if xu < n else wn - (xu - n) - 1
-    print(patch.shape, patch[w_yl:w_yu, w_xl:w_xu, :].shape, sub.shape)
-    patch[w_yl:w_yu, w_xl:w_xu, :] = sub
-    return patch
+    padded_img = np.pad(
+        img, ((y_pad,), (x_pad,), (0,)), mode='constant',
+        constant_values=((pad,), (pad,), (pad,))
+    )
+    oy = (padded_img.shape[0] // 2) - y_pad
+    ox = (padded_img.shape[1] // 2) - x_pad
+    return padded_img[oy:oy + wm, ox:ox + wn, :]
 
 
 def warp_with_context(img, box, out_shape, context=16, pad=0):
@@ -243,12 +234,6 @@ def warp_with_context(img, box, out_shape, context=16, pad=0):
     that will result in the given amount of context in the warped frame) 
     '''
     check_box_coords(box)
-
-    # Compute center position in patch w.r.t. the image
-    center_index = (
-        (box[1] + box[3]) // 2,
-        (box[0] + box[2]) // 2
-    )
 
     # Compute the expanded patch shape
     out_height, out_width = out_shape
@@ -266,6 +251,10 @@ def warp_with_context(img, box, out_shape, context=16, pad=0):
     # Extract the expanded box from the image,
     # by padding external values
     np_img = to_numpy(img)
+    center_index = (
+        (box[1] + box[3]) // 2,
+        (box[0] + box[2]) // 2
+    )
     expanded_box = extract_patch(
         np_img, center_index, new_box_shape, pad=pad
     )
@@ -284,10 +273,8 @@ def scale_box(box, x_scale, y_scale):
     '''
     check_box_coords(box)
     return [
-        box[0] / x_scale,
-        box[1] / y_scale,
-        box[2] / x_scale,
-        box[3] / x_scale
+        box[0] * x_scale, box[1] * y_scale,
+        box[2] * x_scale, box[3] * y_scale
     ]
 
 
@@ -313,6 +300,7 @@ def show_image(img, window_name):
     '''
     cv2.imshow(window_name, to_numpy(img))
     cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def cnn_output_size(model, input_size):
