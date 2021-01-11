@@ -4,6 +4,7 @@ This module is used to instantiate different types of object detection networks
 
 
 import os
+import copy
 from collections import OrderedDict
 
 import numpy as np
@@ -59,14 +60,14 @@ class CustomRoIHeads(RoIHeads):
             box_features = self.box_roi_pool(
                 features['0'], proposals, image_shapes
             )
-        elif self.box_roi_pool is None:
-            box_features = features['0']
+        elif isinstance(self.box_roi_pool, nn.AdaptiveAvgPool2d):
+            box_features = self.box_roi_pool(features['0'])
         else:
             raise ValueError(
                 "The RoI pooling layer in {self.__class__.__name__} "
                 "can only be an instance of torchvision.ops.RoIPool, "
                 "torchvision.ops.RoIAlign, torchvision.ops.MultiScaleRoIAlign "
-                "or None (when the features are already computed from proposals)"
+                "or nn.AdaptiveAvgPool2d (when the features are already computed from proposals)"
             )
 
         # Compute class scores and boxes corrections
@@ -137,15 +138,23 @@ class RCNN(nn.Module):
 
         # R-CNN prediction head
         self.class_score = nn.Linear(
-            self.backbone.out_channels, self.num_classes
+            self.backbone.out_size, self.num_classes
         )
         self.bbox_correction = nn.Linear(
-            self.backbone.out_channels, self.num_classes * 4
+            self.backbone.out_size, self.num_classes * 4
+        )
+
+        # Adaptive average pooling layer
+        self.pool_output_size = (
+            self.backbone.out_height, self.backbone.out_width
+        )
+        self.pooling = nn.AdaptiveAvgPool2d(
+            self.pool_output_size
         )
 
         # Class scores and bounding box corrections predictor
         self.roi_heads = CustomRoIHeads(
-            None, self.class_score, self.bbox_correction,
+            self.pooling, self.class_score, self.bbox_correction,
             fg_iou_thresh=params.detector.box_fg_iou_thresh,
             bg_iou_thresh=params.detector.box_bg_iou_thresh,
             batch_size_per_image=params.detector.box_batch_size_per_image,
@@ -197,25 +206,66 @@ class RCNN(nn.Module):
         results = []
         losses = {}
         for i, img in enumerate(images):
-            proposals, proposals_coords = self.rp_model(img.unsqueeze(0))
-            proposals = proposals[0]
-            print(len(proposals), proposals[0].shape)
-
-            transformed_images, transformed_targets = self.transform(
-                proposals, [targets[i]] * len(proposals)
+            # Extract proposals
+            proposals, proposals_coords = self.rp_model(
+                img.unsqueeze(0)
             )
-            print(transformed_images.tensors.shape)
+
+            # Encode proposals coordinates as the entire proposal
+            # and translate original targets into the proposal
+            # reference frame
+            orig_target = targets[i]
+            t_targets, t_proposals, t_proposals_coords = [], [], []
+            for i in range(proposals_coords.shape[0]):
+                t_target = copy.deepcopy(orig_target)
+                t_target["boxes"] = t_target["boxes"] - proposals_coords[i]
+                proposal_shape = (proposals[i].shape[1], proposals[i].shape[2])
+                t_target["boxes"] = torchvision.ops.clip_boxes_to_image(
+                    t_target["boxes"], proposal_shape
+                )
+                t_target["area"] = torchvision.ops.box_area(
+                    t_target["boxes"]
+                )
+
+                # Keep only targets whose boxes have area > 0
+                # when translated into the proposal
+                keep = torch.where(t_target["area"] > 0)[0]
+                if keep.shape[0] != 0:
+                    # Filter targets based on keeps
+                    t_target["boxes"] = t_target["boxes"][keep]
+                    t_target["area"] = t_target["area"][keep]
+                    t_target["labels"] = t_target["labels"][keep]
+
+                    # Store targets, proposals and proposals coordinates
+                    t_targets.append({
+                        "boxes": t_target["boxes"],
+                        "area": t_target["area"],
+                        "labels": t_target["labels"],
+                    })
+                    t_proposals_coords.append(
+                        torch.tensor([0, 0, *proposal_shape])
+                    )
+                    t_proposals.append(proposals[i])
+
+            # Transform proposals coordinates to tensor
+            t_proposals_coords = torch.stack(t_proposals_coords).unsqueeze(0)
+
+            print(len(t_proposals), t_proposals[0].shape)
+            transformed_proposals, transformed_targets = self.transform(
+                t_proposals, t_targets
+            )
+            print(transformed_proposals.tensors.shape)
 
             # Call the backbone
-            features = self.backbone(transformed_images.tensors)
+            features = self.backbone(transformed_proposals.tensors)
             print(features.shape)
             if isinstance(features, torch.Tensor):
                 features = OrderedDict([('0', features)])
 
             # Compute classification scores and box regression values
             detections, detector_losses = self.roi_heads(
-                features, proposals_coords,
-                transformed_images.image_sizes, transformed_targets
+                features, t_proposals_coords,
+                transformed_proposals.image_sizes, transformed_targets
             )
 
             # Update losses when training
@@ -229,7 +279,7 @@ class RCNN(nn.Module):
             else:
                 results.extend(
                     self.transform.postprocess(
-                        detections, transformed_images.image_sizes,
+                        detections, transformed_proposals.image_sizes,
                         utils.get_image_sizes(images)
                     )
                 )
@@ -312,6 +362,8 @@ class FastRCNN(RCNN):
 
         # Perform ROI pooling, compute classification scores
         # and box regression values
+        print(proposals_coords)
+        print(transformed_targets)
         detections, detector_losses = self.roi_heads(
             features, proposals_coords,
             transformed_images.image_sizes, transformed_targets

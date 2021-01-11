@@ -217,6 +217,9 @@ class RegionProposals():
         where tuple `i` represents proposals `p` and corresponding
         coordinates `c` for input image `i`
         '''
+        if images.shape[0] == 1:
+            return self._forward(images[0], show=show)
+
         proposals, coords = [], []
         for i in range(images.shape[0]):
             p, c = self._forward(images[i], show=show)

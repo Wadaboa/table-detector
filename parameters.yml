@@ -22,7 +22,7 @@ dataset:
 # Generic configuration
 generic:
   # Random seed for all the randomness sources
-  random_seed: 2
+  random_seed: 24
   # Number of data loading workers
   workers: 4
   # Where should data be processed
