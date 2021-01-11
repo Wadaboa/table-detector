@@ -62,6 +62,10 @@ class Backbone(nn.Module):
             self.out_height * self.out_width * self.out_channels
         )
 
+        # Store ImageNet mean/std
+        self.image_mean = params.backbone.imagenet_params.mean
+        self.image_std = params.backbone.imagenet_params.std
+
     @classmethod
     def get_backbone(cls, backbone_type, pretrained=True):
         '''

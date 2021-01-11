@@ -115,7 +115,8 @@ class RegionProposals():
     SelectiveSearch or EdgeBoxes instance
     '''
 
-    def __init__(self, rp_type, rp_params, optim=True):
+    def __init__(self, rp_type, rp_params,
+                 min_size=None, max_size=None, optim=True):
         # Select the right region proposals model
         if rp_type == 'selective_search':
             self.rp_model = SelectiveSearch(
@@ -134,6 +135,11 @@ class RegionProposals():
             raise ValueError(
                 "Invalid region proposals type"
             )
+
+        # Minimum and maximum sizes used to warp
+        # and resize proposals, if given
+        self.min_size = min_size
+        self.max_size = max_size
 
         # Set the optimized flag for OpenCV
         cv2.setUseOptimized(optim)
@@ -155,6 +161,7 @@ class RegionProposals():
         '''
         Use OpenCV to obtain a list of bounding box proposals
         to pass to the backbone
+        (it expects to receive a normalized image in [0, 1])
         '''
         # Sanity checks
         assert isinstance(img, torch.Tensor), (
@@ -165,9 +172,6 @@ class RegionProposals():
         )
         assert img.sum().item() != 0, (
             "Found a totally black image when running region proposals"
-        )
-        assert torch.all((img >= 0.0) & (img <= 1.0)), (
-            "The input image should already be normalized"
         )
 
         # Convert the image to numpy RGB format
@@ -182,47 +186,40 @@ class RegionProposals():
         if show > 0:
             self.show_proposals(rgb_img, boxes, max_proposals=show)
 
-        # Compute boxes, extract the corresponding proposals
-        # and warp them to be compatible with the chosen backbone
-        proposals, coords = [], []
-        for box in boxes:
+        # Extract proposal and corresponding coordinates
+        proposals = []
+        coords = torch.zeros((len(boxes), 4))
+        for i, box in enumerate(boxes):
             # Convert from (x, y, w, h) to (x1, y1, x2, y2)
-            box_coords = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+            box_coords = torch.tensor(
+                [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+            )
+
+            # Extract proposal as-is
+            proposal = img[:, box[1]:box[1] + box[3], box[0]:box[0] + box[2]]
 
             # Warp proposals with context
-            warped_proposal, x_scale, y_scale = utils.warp_with_context(
-                img, box_coords,
-                (self.backbone.in_height, self.backbone.in_width)
-            )
-
-            # Convert to tensor and normalize in [0, 1]
-            norm_proposal = utils.normalize_image(
-                utils.to_tensor(warped_proposal)
-            )
-            proposals.append(norm_proposal)
-
-            coords.append(
-                torch.tensor(
-                    utils.scale_box(
-                        box_coords, x_scale=x_scale, y_scale=y_scale
-                    )
+            if self.min_size is not None and self.max_size is not None:
+                proposal, box_coords = utils.warp_with_context(
+                    img, box_coords, self.min_size, self.max_size
                 )
-            )
+
+            # Store proposals and corresponding coordinates
+            proposals.append(proposal)
+            coords[i] = box_coords
 
         return proposals, coords
 
     def __call__(self, images, show=0):
         '''
         Compute region proposals for each PyTorch tensor in the
-        input image list and return a list of tuples `(p, c)`,
+        input batch and return a list of tuples `(p, c)`,
         where tuple `i` represents proposals `p` and corresponding
         coordinates `c` for input image `i`
         '''
-        if not isinstance(images, list):
-            images = [images]
         proposals, coords = [], []
-        for img in images:
-            p, c = self._forward(img, show=show)
+        for i in range(images.shape[0]):
+            p, c = self._forward(images[i], show=show)
             proposals.append(p)
             coords.append(c)
         return proposals, coords

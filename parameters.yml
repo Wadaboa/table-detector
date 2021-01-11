@@ -22,7 +22,7 @@ dataset:
 # Generic configuration
 generic:
   # Random seed for all the randomness sources
-  random_seed: 42
+  random_seed: 2
   # Number of data loading workers
   workers: 4
   # Where should data be processed
@@ -82,14 +82,14 @@ backbone:
 detector:
   # Actual detector to use
   # Types: rcnn, fast_rcnn, faster_rcnn
-  type: fast_rcnn
+  type: rcnn
 
   # Standard region proposals configuration
   region_proposals:
     # Region proposal algorithm
     type: edge_boxes
     # Number of maximum proposals per image
-    max_proposals: 2000
+    max_proposals: 10
     # Selective search configuration
     selective_search:
       # Selective search type

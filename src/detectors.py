@@ -60,7 +60,7 @@ class CustomRoIHeads(RoIHeads):
                 features['0'], proposals, image_shapes
             )
         elif self.box_roi_pool is None:
-            box_features = features
+            box_features = features['0']
         else:
             raise ValueError(
                 "The RoI pooling layer in {self.__class__.__name__} "
@@ -70,8 +70,11 @@ class CustomRoIHeads(RoIHeads):
             )
 
         # Compute class scores and boxes corrections
+        print(box_features.shape)
         flattened_features = torch.flatten(box_features, start_dim=1)
+        print(flattened_features.shape)
         class_logits = self.box_head(flattened_features)
+        print(class_logits.shape)
         box_regression = self.box_predictor(flattened_features)
 
         result = []
@@ -114,26 +117,30 @@ class RCNN(nn.Module):
 
         # Get backbone
         self.backbone = backbones.Backbone(params)
+        print(self.backbone, self.backbone.out_size)
+
+        # Input standardization/resizing
+        self.transform = GeneralizedRCNNTransform(
+            min_size=params.backbone.input_size.bound.min,
+            max_size=params.backbone.input_size.bound.max,
+            image_mean=self.backbone.image_mean,
+            image_std=self.backbone.image_std
+        )
 
         # Select region proposals model and parameters
         self.rp_model = region_proposal.RegionProposals(
             params.detector.region_proposals.type,
-            params.detector.region_proposals
-        )
-
-        self.transform = GeneralizedRCNNTransform(
+            params.detector.region_proposals,
             min_size=params.backbone.input_size.bound.min,
             max_size=params.backbone.input_size.bound.max,
-            image_mean=params.backbone.imagenet_params.mean,
-            image_std=params.backbone.imagenet_params.std
         )
 
         # R-CNN prediction head
         self.class_score = nn.Linear(
-            self.backbone.out_size, self.num_classes
+            self.backbone.out_channels, self.num_classes
         )
         self.bbox_correction = nn.Linear(
-            self.backbone.out_size, self.num_classes * 4
+            self.backbone.out_channels, self.num_classes * 4
         )
 
         # Class scores and bounding box corrections predictor
@@ -190,7 +197,8 @@ class RCNN(nn.Module):
         results = []
         losses = {}
         for i, img in enumerate(images):
-            proposals, proposals_coords = self.rp_model(img)
+            proposals, proposals_coords = self.rp_model(img.unsqueeze(0))
+            proposals = proposals[0]
             print(len(proposals), proposals[0].shape)
 
             transformed_images, transformed_targets = self.transform(
@@ -242,15 +250,13 @@ class FastRCNN(RCNN):
     def __init__(self, params, num_classes):
         super(FastRCNN, self).__init__(params, num_classes)
 
-        # Input standardization/resizing
-        self.transform = GeneralizedRCNNTransform(
-            min_size=params.backbone.input_size.bound.min,
-            max_size=params.backbone.input_size.bound.max,
-            image_mean=params.backbone.imagenet_params.mean,
-            image_std=params.backbone.imagenet_params.std
+        # Select region proposals model and parameters
+        self.rp_model = region_proposal.RegionProposals(
+            params.detector.region_proposals.type,
+            params.detector.region_proposals
         )
 
-        # ROI pooling configuration
+        # RoI pooling configuration
         self.roi_pool_output_size = (
             self.backbone.out_height, self.backbone.out_width
         )
@@ -292,10 +298,12 @@ class FastRCNN(RCNN):
         )
 
         # Get static proposals using one of the the implemented methods
-        proposals = []
-        for img in images:
-            _, proposals_coords = self.rp_model(img)
-            proposals.append(proposals_coords)
+        des_images = utils.destandardize_image(
+            transformed_images.tensors,
+            mean=self.backbone.image_mean,
+            std=self.backbone.image_std
+        )
+        _, proposals_coords = self.rp_model(des_images)
 
         # Call the backbone
         features = self.backbone(transformed_images.tensors)
@@ -305,7 +313,8 @@ class FastRCNN(RCNN):
         # Perform ROI pooling, compute classification scores
         # and box regression values
         detections, detector_losses = self.roi_heads(
-            features, proposals, transformed_images.image_sizes, transformed_targets
+            features, proposals_coords,
+            transformed_images.image_sizes, transformed_targets
         )
 
         # Return detections when evaluating

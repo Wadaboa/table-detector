@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 import PIL
 
 
@@ -112,7 +113,7 @@ def get_image_size(img):
 
 def get_image_sizes(imgs):
     '''
-    Return a list of sizes (one for each input image)
+    Return a list of (h, w) sizes (one for each input image)
     '''
     sizes = []
     for img in imgs:
@@ -218,27 +219,27 @@ def most_overlapping_box(box, boxes, min_iou):
 
 def extract_patch(img, center_index, patch_shape, pad=0):
     '''
-    Extract a patch of the given shape from the given numpy image, centered around
+    Extract a patch of the given shape from the given PyTorch image, centered around
     the specified position and pad external values with the given fill value
     '''
-    m, n, _ = img.shape
+    _, m, n = img.shape
     wm, wn = patch_shape
     y_pad, x_pad = wm // 2, wn // 2
     yl, yu = center_index[0] - y_pad, center_index[0] + y_pad
     xl, xu = center_index[1] - x_pad, center_index[1] + x_pad
     if xl >= 0 and xu < n and yl >= 0 and yu < m:
-        return np.array(img[yl:yu + 1, xl:xu + 1, :], dtype=img.dtype)
+        return img[:, yl:yu + 1, xl:xu + 1]
 
-    padded_img = np.pad(
-        img, ((y_pad,), (x_pad,), (0,)), mode='constant',
-        constant_values=((pad,), (pad,), (pad,))
+    padded_img = F.pad(
+        img, (x_pad, x_pad, y_pad, y_pad),
+        mode='constant', value=pad
     )
-    oy = (padded_img.shape[0] // 2) - y_pad
-    ox = (padded_img.shape[1] // 2) - x_pad
-    return padded_img[oy:oy + wm, ox:ox + wn, :]
+    oy = (padded_img.shape[1] // 2) - y_pad
+    ox = (padded_img.shape[2] // 2) - x_pad
+    return padded_img[:, oy:oy + wm, ox:ox + wn]
 
 
-def warp_with_context(img, box, out_shape, context=16, pad=0):
+def warp_with_context(img, box, min_size, max_size, context=16, pad=0):
     '''
     Given a patch from the image, warp it anisotropically to the desired
     output shape (before warping, the patch is expanded to a new size
@@ -246,8 +247,15 @@ def warp_with_context(img, box, out_shape, context=16, pad=0):
     '''
     check_box_coords(box)
 
+    # Compute the output shape of the given image
+    scale_factor = resize_factor(img, min_size, max_size)
+    in_width, in_height = get_image_size(img)
+    out_height, out_width = (
+        in_height * scale_factor,
+        in_width * scale_factor
+    )
+
     # Compute the expanded patch shape
-    out_height, out_width = out_shape
     box_height, box_width = (
         box[3] - box[1],
         box[2] - box[0]
@@ -261,13 +269,12 @@ def warp_with_context(img, box, out_shape, context=16, pad=0):
 
     # Extract the expanded box from the image,
     # by padding external values
-    np_img = to_numpy(img)
     center_index = (
         (box[1] + box[3]) // 2,
         (box[0] + box[2]) // 2
     )
     expanded_box = extract_patch(
-        np_img, center_index, new_box_shape, pad=pad
+        img, center_index, new_box_shape, pad=pad
     )
 
     # Compute resizing scales
@@ -275,7 +282,31 @@ def warp_with_context(img, box, out_shape, context=16, pad=0):
     x_scale = new_box_shape[1] / out_width
 
     # Resize the extracted box to the desired shape
-    return cv2.resize(expanded_box, out_shape), x_scale, y_scale
+    scaled_img = F.interpolate(
+        expanded_box[None], scale_factor=scale_factor,
+        mode='bilinear', recompute_scale_factor=True,
+        align_corners=False
+    )[0]
+    scaled_box = torch.tensor(
+        scale_box(box, x_scale=x_scale, y_scale=y_scale)
+    )
+
+    return scaled_img, scaled_box
+
+
+def resize_factor(img, min_size, max_size):
+    '''
+    Compute the scaling factor to be applied to
+    the given image, in order to have dimensions 
+    between `(min_size, min_size)` and `(max_size, max_size)`
+    '''
+    shape = torch.tensor(img.shape[-2:])
+    min_shape = float(torch.min(shape))
+    max_shape = float(torch.max(shape))
+    scale_factor = min_size / min_shape
+    if max_size * scale_factor > max_size:
+        scale_factor = max_size / max_shape
+    return scale_factor
 
 
 def scale_box(box, x_scale, y_scale):
@@ -354,10 +385,29 @@ def denormalize_image(img, max_value=255):
     assert isinstance(img, torch.Tensor), (
         "Denormalization can only be applied to PyTorch tensors"
     )
-    assert img.max() <= 1, (
-        "The input image is not normalized, cannot denormalize"
+    assert int(img.min()) >= 0 and int(img.max()) <= 1, (
+        f"The input image is not normalized, cannot denormalize "
+        f"(image in range [{img.min()}, {img.max()}])"
     )
     return (img.float() * float(max_value)).type(torch.uint8)
+
+
+def destandardize_image(img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    '''
+    Denstandardize the given image (or batch of images) in each channel
+    (default mean/std given by ImageNet parameters)
+    '''
+    assert isinstance(img, torch.Tensor), (
+        "Destandardization can only be applied to PyTorch tensors"
+    )
+    mean = torch.as_tensor(mean, dtype=img.dtype, device=img.device)
+    std = torch.as_tensor(std, dtype=img.dtype, device=img.device)
+    if mean.ndim == 1:
+        mean = mean.view(-1, 1, 1)
+    if std.ndim == 1:
+        std = std.view(-1, 1, 1)
+    img.mul_(std).add_(mean)
+    return img
 
 
 def flatten(a):
