@@ -89,7 +89,7 @@ detector:
     # Region proposal algorithm
     type: edge_boxes
     # Number of maximum proposals per image
-    num_proposals: 2000
+    max_proposals: 2000
     # Selective search configuration
     selective_search:
       # Selective search type

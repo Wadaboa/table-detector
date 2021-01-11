@@ -29,8 +29,8 @@ class Backbone(nn.Module):
         self.pretrained = params.backbone.pretrained
         self.in_channels = 3
         self.in_height, self.in_width = (
-            params.backbone.input_size.height,
-            params.backbone.input_size.height,
+            params.backbone.input_size.exact.height,
+            params.backbone.input_size.exact.height,
         )
 
         # Get the backbone model
