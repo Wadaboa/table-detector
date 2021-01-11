@@ -12,6 +12,7 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional as TF
 from torchvision.models.detection.transform import resize_boxes
+from torchviz import make_dot
 
 import backbones
 import utils
@@ -35,6 +36,7 @@ class RCNN(nn.Module):
         self.device = params.generic.device
         self.num_proposals = params.detector.region_proposals.num_proposals
         self.proposals_type = params.detector.region_proposals.type
+        self.box_regression_weight = params.detector.box_regression_weight
 
         # Select region proposals model and parameters
         assert self.proposals_type in ("selective_search", "edge_boxes"), (
@@ -262,10 +264,14 @@ class RCNN(nn.Module):
             class_scores[:num_proposals, :],
             torch.tensor(class_labels)
         )
-        loss_box_reg = self.bbox_correction_criterion(
-            torch.stack(bbox_predictions),
-            torch.stack(bbox_ground_truths)
-        )
+        loss_box_reg = 0
+        if len(bbox_predictions) > 0:
+            loss_box_reg = self.bbox_correction_criterion(
+                torch.stack(bbox_predictions),
+                torch.stack(bbox_ground_truths)
+            ) * self.box_regression_weight
+
+        #make_dot(loss_classifier).render("attached", format="png")
 
         return loss_classifier, loss_box_reg, outputs
 

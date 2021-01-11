@@ -106,6 +106,10 @@ detector:
       # NMS threshold for object proposal
       beta: !!float 0.75
 
+  # Weight that is multiplied to the bounding
+  # box regression loss
+  box_regression_weight: !!float 1.0
+
   # Faster R-CNN configuration
   faster_rcnn:
     # Anchors generation configuration
