@@ -4,6 +4,7 @@ This module is used to instantiate different types of object detection networks
 
 
 import os
+from collections import OrderedDict
 
 import numpy as np
 import cv2
@@ -12,7 +13,8 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional as TF
 from torchvision.models.detection.transform import resize_boxes
-from torchviz import make_dot
+from torchvision.models.detection.roi_heads import RoIHeads, fastrcnn_loss
+from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
 import backbones
 import utils
@@ -311,6 +313,117 @@ class RCNN(nn.Module):
 
         return loss_dict
 
+    def _forward(self, images, targets=None):
+        transformed_images, transformed_targets = self.transform(
+            images, targets
+        )
+
+        # Get static proposals using one of the the implemented methods
+        proposals = []
+        for img in images:
+            _, proposals, proposals_coords = self.region_proposals(img)
+            proposals.append(proposals_coords)
+
+        # Call the backbone
+        features = self.backbone(transformed_images.tensors)
+        if isinstance(features, torch.Tensor):
+            features = OrderedDict([('0', features)])
+
+        # Perform ROI pooling, compute classification scores
+        # and box regression values
+        detections, detector_losses = self.roi_heads(
+            features, proposals, transformed_images.image_sizes, transformed_targets
+        )
+
+        # Return detections when evaluating
+        if not self.training:
+            detections = self.transform.postprocess(
+                detections, transformed_images.image_sizes,
+                utils.get_image_sizes(images)
+            )
+            return detections
+
+        # Return losses when training
+        return detector_losses
+
+
+class CustomRoIHeads(RoIHeads):
+    '''
+    Custom subclass of the torchvision RoIHeads module
+    '''
+
+    def __init__(self, box_roi_pool, box_head, box_predictor,
+                 fg_iou_thresh, bg_iou_thresh, batch_size_per_image,
+                 positive_fraction, bbox_reg_weights,
+                 score_thresh, nms_thresh, detections_per_img):
+        super(CustomRoIHeads, self).__init__(
+            box_roi_pool, box_head, box_predictor,
+            fg_iou_thresh, bg_iou_thresh, batch_size_per_image,
+            positive_fraction, bbox_reg_weights,
+            score_thresh, nms_thresh, detections_per_img
+        )
+
+    def forward(self, features, proposals, image_shapes, targets=None):
+        '''
+        Args:
+            features (List[Tensor])
+            proposals (List[Tensor[N, 4]])
+            image_shapes (List[Tuple[H, W]])
+            targets (List[Dict])
+        '''
+        labels, regression_targets = None, None
+        if self.training:
+            proposals, _, labels, regression_targets = self.select_training_samples(
+                proposals, targets
+            )
+
+        # Rescale features with the RoI pooling layer
+        if (isinstance(self.box_roi_pool, torchvision.ops.RoIPool) or
+                isinstance(self.box_roi_pool, torchvision.ops.RoIAlign)):
+            box_features = self.box_roi_pool(features['0'], proposals)
+        elif isinstance(self.box_roi_pool, torchvision.ops.MultiScaleRoIAlign):
+            box_features = self.box_roi_pool(
+                features['0'], proposals, image_shapes
+            )
+        else:
+            raise ValueError(
+                "The RoI pooling layer in {self.__class__.__name__} "
+                "can only be an instance of torchvision.ops.RoIPool, "
+                "torchvision.ops.RoIAlign or torchvision.ops.MultiScaleRoIAlign"
+            )
+
+        # Compute class scores and boxes corrections
+        flattened_features = torch.flatten(box_features, start_dim=1)
+        class_logits = self.box_head(flattened_features)
+        box_regression = self.box_predictor(flattened_features)
+
+        result = []
+        losses = {}
+        if self.training:
+            assert labels is not None and regression_targets is not None
+            loss_classifier, loss_box_reg = fastrcnn_loss(
+                class_logits, box_regression, labels, regression_targets
+            )
+            losses = {
+                "loss_classifier": loss_classifier,
+                "loss_box_reg": loss_box_reg
+            }
+        else:
+            boxes, scores, labels = self.postprocess_detections(
+                class_logits, box_regression, proposals, image_shapes
+            )
+            num_images = len(boxes)
+            for i in range(num_images):
+                result.append(
+                    {
+                        "boxes": boxes[i],
+                        "labels": labels[i],
+                        "scores": scores[i],
+                    }
+                )
+
+        return result, losses
+
 
 class FastRCNN(RCNN):
     '''
@@ -319,6 +432,14 @@ class FastRCNN(RCNN):
 
     def __init__(self, params, num_classes):
         super(FastRCNN, self).__init__(params, num_classes)
+
+        # Input standardization/resizing
+        self.transform = GeneralizedRCNNTransform(
+            min_size=params.backbone.input_size.bounds.min,
+            max_size=params.backbone.input_size.bounds.max,
+            image_mean=params.backbone.imagenet_params.mean,
+            image_std=params.backbone.imagenet_params.std
+        )
 
         # ROI pooling configuration
         self.roi_pool_output_size = (
@@ -331,46 +452,63 @@ class FastRCNN(RCNN):
             self.roi_pool_output_size, self.roi_pool_spatial_scale
         )
 
-        # Loss criterions
-        self.bbox_correction_criterion = nn.SmoothL1Loss()
+        # Class scores and bounding box corrections predictor
+        self.roi_heads = CustomRoIHeads(
+            self.roi_pool, self.class_score, self.bbox_correction,
+            fg_iou_thresh=params.detector.box_fg_iou_thresh,
+            bg_iou_thresh=params.detector.box_bg_iou_thresh,
+            batch_size_per_image=params.detector.box_batch_size_per_image,
+            positive_fraction=params.detector.box_positive_fraction,
+            bbox_reg_weights=params.detector.box_regression_weights,
+            score_thresh=params.detector.box_score_thresh,
+            nms_thresh=params.detector.box_nms_thresh,
+            detections_per_img=params.detector.box_detections_per_img
+        )
 
     def forward(self, images, targets=None):
         '''
-        1. Region proposals for the each image
+        1. Region proposals for each image
         2. Backbone for each image
         3. ROI pooling layer to crop and warp backbone features according to proposals
         4. R-CNN prediction head for each proposal in an image
            (input is the output of ROI pool)
         '''
-        assert isinstance(images, list) and len(images[0].shape) == 3
-        loss_dict = {'loss_classifier': 0, 'loss_box_reg': 0}
+        # Perform the following transformations:
+        # - Image standardization
+        # - Image/target resizing
+        # Returns a tuple (image_list, targets), where image_list
+        # is an instance of torchvision.models.detection.image_list.ImageList
+        transformed_images, transformed_targets = self.transform(
+            images, targets
+        )
 
-        for i, img in enumerate(images):
-            # Compute predictions
-            warped_image = TF.resize(
-                img, (self.backbone.in_height, self.backbone.in_width)
-            )
-            standardized_image = utils.standardize_image(warped_image)
-            features = self.backbone(standardized_image.unsqueeze(0))
-            num_proposals, _, proposals_coords = self.region_proposals(
-                warped_image
-            )
-            rescaled_features = self.roi_pool(features, [proposals_coords])
-            flattened_features = torch.flatten(rescaled_features, start_dim=1)
-            class_scores = self.class_score(flattened_features)
-            bbox_corrections = self.bbox_correction(flattened_features).reshape(
-                self.num_proposals, self.num_classes, 4
-            )
+        # Get static proposals using one of the the implemented methods
+        proposals = []
+        for img in images:
+            _, _, proposals_coords = self.region_proposals(img)
+            proposals.append(proposals_coords)
 
-            # Compute losses
-            loss_classifier, loss_box_reg, _ = self.compute_loss(
-                num_proposals, proposals_coords,
-                class_scores, bbox_corrections, targets[i]
-            )
-            loss_dict['loss_classifier'] += loss_classifier
-            loss_dict['loss_box_reg'] += loss_box_reg
+        # Call the backbone
+        features = self.backbone(transformed_images.tensors)
+        if isinstance(features, torch.Tensor):
+            features = OrderedDict([('0', features)])
 
-        return loss_dict
+        # Perform ROI pooling, compute classification scores
+        # and box regression values
+        detections, detector_losses = self.roi_heads(
+            features, proposals, transformed_images.image_sizes, transformed_targets
+        )
+
+        # Return detections when evaluating
+        if not self.training:
+            detections = self.transform.postprocess(
+                detections, transformed_images.image_sizes,
+                utils.get_image_sizes(images)
+            )
+            return detections
+
+        # Return losses when training
+        return detector_losses
 
 
 class FasterRCNN(nn.Module):
@@ -434,9 +572,7 @@ class FasterRCNN(nn.Module):
         '''
         # Returns losses when in training mode and
         # detections when in evaluation mode
-        return self.faster_rcnn(
-            images, targets=targets
-        )
+        return self.faster_rcnn(images, targets=targets)
 
 
 def _get_rcnn(params, num_classes):

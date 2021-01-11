@@ -110,6 +110,17 @@ def get_image_size(img):
     return None
 
 
+def get_image_sizes(imgs):
+    '''
+    Return a list of sizes (one for each input image)
+    '''
+    sizes = []
+    for img in imgs:
+        width, height = get_image_size(img)
+        sizes.append((height, width))
+    return sizes
+
+
 def check_box_coords(box):
     '''
     Check that the coordinates of the given box are in
