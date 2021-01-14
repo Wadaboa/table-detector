@@ -71,11 +71,8 @@ class CustomRoIHeads(RoIHeads):
             )
 
         # Compute class scores and boxes corrections
-        print(box_features.shape)
         flattened_features = torch.flatten(box_features, start_dim=1)
-        print(flattened_features.shape)
         class_logits = self.box_head(flattened_features)
-        print(class_logits.shape)
         box_regression = self.box_predictor(flattened_features)
 
         result = []
@@ -172,37 +169,8 @@ class RCNN(nn.Module):
         3. R-CNN prediction head for each proposal in an image
            (input is the output of backbone)
         '''
-        return self._forward(images, targets)
         assert isinstance(images, list) and len(images[0].shape) == 3
-        loss_dict = {'loss_classifier': 0, 'loss_box_reg': 0}
 
-        for i, img in enumerate(images):
-            # Compute predictions
-            num_proposals, proposals, proposals_coords = self.region_proposals(
-                img
-            )
-            normalized_proposals = utils.normalize_image(proposals)
-            standardized_proposals = utils.standardize_image(
-                normalized_proposals
-            )
-            features = self.backbone(standardized_proposals)
-            flattened_features = torch.flatten(features, start_dim=1)
-            class_scores = self.class_score(flattened_features)
-            bbox_corrections = self.bbox_correction(flattened_features).reshape(
-                self.num_proposals, self.num_classes, 4
-            )
-
-            # Compute losses
-            loss_classifier, loss_box_reg, _ = self.compute_loss(
-                num_proposals, proposals_coords, class_scores,
-                bbox_corrections, targets[i]
-            )
-            loss_dict['loss_classifier'] += loss_classifier
-            loss_dict['loss_box_reg'] += loss_box_reg
-
-        return loss_dict
-
-    def _forward(self, images, targets=None):
         results = []
         losses = {}
         for i, img in enumerate(images):
@@ -214,59 +182,64 @@ class RCNN(nn.Module):
             # Encode proposals coordinates as the entire proposal
             # and translate original targets into the proposal
             # reference frame
-            orig_target = targets[i]
-            t_targets, t_proposals, t_proposals_coords = [], [], []
-            for i in range(proposals_coords.shape[0]):
-                t_target = copy.deepcopy(orig_target)
-                t_target["boxes"] = t_target["boxes"] - proposals_coords[i]
-                proposal_shape = (proposals[i].shape[1], proposals[i].shape[2])
+            t_targets, t_proposals, t_indexes = [], [], []
+            for j in range(proposals_coords.shape[0]):
+                # Translate targets and re-compute associated info
+                t_target = copy.deepcopy(targets[i])
+                t_target["boxes"] = t_target["boxes"] - proposals_coords[j]
                 t_target["boxes"] = torchvision.ops.clip_boxes_to_image(
-                    t_target["boxes"], proposal_shape
+                    t_target["boxes"],
+                    (proposals[j].shape[1], proposals[j].shape[2])
                 )
-                t_target["area"] = torchvision.ops.box_area(
-                    t_target["boxes"]
-                )
+                t_target["area"] = torchvision.ops.box_area(t_target["boxes"])
 
                 # Keep only targets whose boxes have area > 0
                 # when translated into the proposal
                 keep = torch.where(t_target["area"] > 0)[0]
                 if keep.shape[0] != 0:
-                    # Filter targets based on keeps
-                    t_target["boxes"] = t_target["boxes"][keep]
-                    t_target["area"] = t_target["area"][keep]
-                    t_target["labels"] = t_target["labels"][keep]
-
-                    # Store targets, proposals and proposals coordinates
+                    # Store filtered targets, proposals and proposals coordinates
                     t_targets.append({
-                        "boxes": t_target["boxes"],
-                        "area": t_target["area"],
-                        "labels": t_target["labels"],
+                        "boxes": t_target["boxes"][keep],
+                        "area": t_target["area"][keep],
+                        "labels": t_target["labels"][keep],
                     })
-                    t_proposals_coords.append(
-                        torch.tensor([0, 0, *proposal_shape])
-                    )
-                    t_proposals.append(proposals[i])
+                    t_proposals.append(proposals[j])
+                    t_indexes.append(j)
 
-            # Transform proposals coordinates to tensor
-            t_proposals_coords = torch.stack(t_proposals_coords).unsqueeze(0)
-
-            print(len(t_proposals), t_proposals[0].shape)
+            # Standardize and resize proposals and targets
             transformed_proposals, transformed_targets = self.transform(
                 t_proposals, t_targets
             )
-            print(transformed_proposals.tensors.shape)
+
+            # Assign one proposal to each proposal image (the entire image)
+            proposals_shape = transformed_proposals.tensors.shape
+            t_proposals_coords = [
+                torch.tensor(
+                    [[0, 0, proposals_shape[2], proposals_shape[3]]],
+                    dtype=torch.float32
+                )
+            ] * proposals_shape[0]
 
             # Call the backbone
             features = self.backbone(transformed_proposals.tensors)
-            print(features.shape)
             if isinstance(features, torch.Tensor):
                 features = OrderedDict([('0', features)])
+
+            # Repeat the feature map associated to each proposal
+            # a number of time which is equal to the number of
+            # targets that fit in the corresponding proposal
+            num_reps = torch.tensor(
+                [t["boxes"].shape[0] + 1 for t in transformed_targets]
+            )
+            for k in features:
+                features[k] = features[k].repeat_interleave(num_reps, dim=0)
 
             # Compute classification scores and box regression values
             detections, detector_losses = self.roi_heads(
                 features, t_proposals_coords,
                 transformed_proposals.image_sizes, transformed_targets
             )
+            print(detections)
 
             # Update losses when training
             if self.training:
@@ -277,14 +250,14 @@ class RCNN(nn.Module):
                         losses[k] += v
             # Update detections when evaluating
             else:
-                results.extend(
-                    self.transform.postprocess(
-                        detections, transformed_proposals.image_sizes,
-                        utils.get_image_sizes(images)
-                    )
+                proc_dets = self.transform.postprocess(
+                    detections, transformed_proposals.image_sizes,
+                    utils.get_image_sizes(t_proposals)
                 )
+                for res, ind in zip(results, t_indexes):
+                    pass
 
-        # Return detections when evaluating
+                    # Return detections when evaluating
         if not self.training:
             return results
 
@@ -338,6 +311,8 @@ class FastRCNN(RCNN):
         4. R-CNN prediction head for each proposal in an image
            (input is the output of ROI pool)
         '''
+        assert isinstance(images, list) and len(images[0].shape) == 3
+
         # Perform the following transformations:
         # - Image standardization
         # - Image/target resizing
@@ -362,8 +337,6 @@ class FastRCNN(RCNN):
 
         # Perform ROI pooling, compute classification scores
         # and box regression values
-        print(proposals_coords)
-        print(transformed_targets)
         detections, detector_losses = self.roi_heads(
             features, proposals_coords,
             transformed_images.image_sizes, transformed_targets

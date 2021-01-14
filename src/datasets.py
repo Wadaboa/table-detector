@@ -22,6 +22,7 @@ from pathlib import Path
 
 import cv2
 import torch
+import torchvision
 import torchvision.transforms.functional as TF
 import numpy as np
 import PIL
@@ -187,9 +188,9 @@ class MarmotTableRecognitionDataset(Dataset):
         target["image_id"] = torch.tensor([index])
         target["image_shape"] = torch.tensor(cv_img.shape, dtype=torch.int64)
         target["area"] = (
-            (t_boxes[:, 3] - t_boxes[:, 1]) *
-            (t_boxes[:, 2] - t_boxes[:, 0])
-        ) if len(boxes) > 0 else torch.zeros((len(boxes),), dtype=torch.int64)
+            torchvision.ops.box_area(target["boxes"]) if len(boxes) > 0
+            else torch.zeros((len(boxes),), dtype=torch.int64)
+        )
         target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
 
         # Apply the given transformations
@@ -366,9 +367,9 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 cv_img.shape, dtype=torch.int64
             )
             target["area"] = (
-                abs(t_boxes[:, 3] - t_boxes[:, 1]) *
-                abs(t_boxes[:, 2] - t_boxes[:, 0])
-            ) if len(boxes) > 0 else torch.zeros((len(boxes_in_page),), dtype=torch.int64)
+                torchvision.ops.box_area(target["boxes"]) if len(boxes_in_page) > 0
+                else torch.zeros((len(boxes_in_page),), dtype=torch.int64)
+            )
             target["iscrowd"] = torch.zeros(
                 (len(boxes_in_page),), dtype=torch.int64
             )
