@@ -38,6 +38,14 @@ training:
   log_interval: 1
   # Batch size
   batch_size: 2
+  # How to handle model checkpoints during training
+  checkpoints:
+    # Enable or disable saving checkpoints
+    save: True
+    # How often to save checkpoints (epochs)
+    frequency: 3
+    # Where to save checkpoints
+    path: checkpoints
 
 # What ImageNet backbone to use
 backbone:

@@ -5,7 +5,7 @@ This module is used to instantiate different types of object detection networks
 
 import os
 import copy
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 import numpy as np
 import cv2
@@ -115,7 +115,6 @@ class RCNN(nn.Module):
 
         # Get backbone
         self.backbone = backbones.Backbone(params)
-        print(self.backbone, self.backbone.out_size)
 
         # Input standardization/resizing
         self.transform = GeneralizedRCNNTransform(
@@ -239,7 +238,6 @@ class RCNN(nn.Module):
                 features, t_proposals_coords,
                 transformed_proposals.image_sizes, transformed_targets
             )
-            print(detections)
 
             # Update losses when training
             if self.training:
@@ -250,14 +248,28 @@ class RCNN(nn.Module):
                         losses[k] += v
             # Update detections when evaluating
             else:
+                # Translate boxes to before standardization/scaling
                 proc_dets = self.transform.postprocess(
                     detections, transformed_proposals.image_sizes,
                     utils.get_image_sizes(t_proposals)
                 )
-                for res, ind in zip(results, t_indexes):
-                    pass
 
-                    # Return detections when evaluating
+                # Translate boxes back into the original image frame
+                t_res = defaultdict(list)
+                for res, ind in zip(proc_dets, t_indexes):
+                    t_res["labels"].append(res["labels"])
+                    t_res["scores"].append(res["scores"])
+                    for box in res["boxes"]:
+                        t_res["boxes"].append(box + proposals_coords[ind])
+
+                # One dictionary of results (containing tensors)
+                # for each original image
+                t_res["boxes"] = torch.cat(t_res["boxes"])
+                t_res["labels"] = torch.cat(t_res["labels"])
+                t_res["scores"] = torch.cat(t_res["scores"])
+                results.append(t_res)
+
+        # Return detections when evaluating
         if not self.training:
             return results
 
@@ -344,11 +356,10 @@ class FastRCNN(RCNN):
 
         # Return detections when evaluating
         if not self.training:
-            detections = self.transform.postprocess(
+            return self.transform.postprocess(
                 detections, transformed_images.image_sizes,
                 utils.get_image_sizes(images)
             )
-            return detections
 
         # Return losses when training
         return detector_losses

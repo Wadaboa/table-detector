@@ -1,5 +1,6 @@
 import random
 import traceback
+import datetime
 import warnings
 import sys
 
@@ -419,6 +420,13 @@ def flatten(a):
             yield from flatten(s)
     else:
         yield a
+
+
+def now():
+    '''
+    Returns the current date and time
+    '''
+    return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):

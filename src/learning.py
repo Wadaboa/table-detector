@@ -6,6 +6,7 @@ training and evaluating a PyTorch model
 
 import math
 import sys
+import os
 import time
 import datetime
 from collections import defaultdict, deque
@@ -139,22 +140,31 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time),
-                        memory=torch.cuda.max_memory_allocated() / MB))
+                    print(
+                        log_msg.format(
+                            i, len(iterable), eta=eta_string,
+                            meters=str(self),
+                            time=str(iter_time), data=str(data_time),
+                            memory=torch.cuda.max_memory_allocated() / MB
+                        )
+                    )
                 else:
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time)))
+                    print(
+                        log_msg.format(
+                            i, len(iterable), eta=eta_string,
+                            meters=str(self),
+                            time=str(iter_time), data=str(data_time)
+                        )
+                    )
             i += 1
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print('{} Total time: {} ({:.4f} s / it)'.format(
-            header, total_time_str, total_time / len(iterable)))
+        print(
+            '{} Total time: {} ({:.4f} s / it)'.format(
+                header, total_time_str, total_time / len(iterable)
+            )
+        )
 
 
 def collate_fn(batch):
@@ -174,34 +184,48 @@ def collate_fn(batch):
 
 
 def train_one_epoch(params, model, optimizer, dataloader, epoch):
+    '''
+    Train the given model for one epoch with the given
+    dataloader and parameters
+    '''
+    # Put the model in training mode
     model.train()
-    metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(
-        window_size=1, fmt='{value:.6f}')
-    )
-    header = 'Epoch: [{}]'.format(epoch)
 
-    for images, targets in metric_logger.log_every(dataloader, params.training.log_interval, header):
-        #images = torch.stack(images).to(params.generic.device)
+    # Create an instance of the metric logger
+    metric_logger = MetricLogger(delimiter=" ")
+    metric_logger.add_meter(
+        'lr', SmoothedValue(window_size=1, fmt='{value:.6f}')
+    )
+    dataloader_wrapper = metric_logger.log_every(
+        dataloader, params.training.log_interval, header=f'Epoch: [{epoch}]'
+    )
+
+    # For each batch of (images, targets) pairs
+    for images, targets in dataloader_wrapper:
+
+        # Transfer to device
         images = list(image.to(params.generic.device) for image in images)
         targets = [
             {k: v.to(params.generic.device) for k, v in t.items()} for t in targets
         ]
 
+        # Aggregate losses
         loss_dict = model(images, targets)
-        print(loss_dict)
         losses = sum(loss for loss in loss_dict.values())
         loss_value = losses.item()
 
+        # Stop if loss is not finite
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             print(loss_dict)
             sys.exit(1)
 
+        # Perform backpropagation
         optimizer.zero_grad()
         losses.backward()
         optimizer.step()
 
+        # Update metrics
         metric_logger.update(loss=losses, **loss_dict)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
@@ -210,31 +234,49 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
 
 def training_loop(params, model, optimizer, train_dataloader,
                   val_dataloader, lr_scheduler=None):
+    '''
+    Standard training loop function: train and evaluate
+    after each training epoch
+    '''
+    # Track execution time
     start_time = time.time()
+
+    # For each epoch
     for epoch in range(1, params.training.epochs + 1):
+
+        # Train for one epoch
         train_one_epoch(params, model, optimizer, train_dataloader, epoch)
+
+        # Decay the learning rate
         if lr_scheduler is not None:
             lr_scheduler.step()
-        '''
-        if args.output_dir:
-            utils.save_on_master({
-                'model': model_without_ddp.state_dict(),
+
+        # Save checkpoints once in a while
+        if (params.learning.checkpoints.save and
+                epoch % params.learning.checkpoints.frequency == 0):
+            state_dict = {
+                'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'lr_scheduler': lr_scheduler.state_dict(),
-                'args': args,
-                'epoch': epoch},
-                os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
-        '''
+                'params': params,
+                'epoch': epoch
+            }
+            torch.save(
+                state_dict,
+                os.path.join(
+                    params.learning.checkpoints.path,
+                    f'{utils.now()}_{epoch}.pth'
+                )
+            )
 
-        # evaluate after every epoch
-        # evaluate(model, val_dataloader)
+        # Evaluate after every epoch
+        evaluate(model, val_dataloader)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print(f'Training time {total_time_str}')
 
 
-'''
 @torch.no_grad()
 def evaluate(model, dataloader, device, log_interval):
     model.eval()
@@ -274,60 +316,3 @@ def evaluate(model, dataloader, device, log_interval):
     coco_evaluator.summarize()
     torch.set_num_threads(n_threads)
     return coco_evaluator
-'''
-
-"""
-def training_loop(model, optimizer, lr_scheduler, train_dataloader, val_dataloader, device, epochs, log_interval):
-    '''
-    Executes the training loop for the specified number of epochs
-    '''
-    loop_start = time()
-    losses = {
-        'bbox': [],
-        'class': []
-    }
-
-    for epoch in range(1, epochs + 1):
-        time_start = time()
-        losses = train_one_epoch(
-            model, optimizer, train_dataloader, device, epoch, log_interval
-        )
-        '''
-        loss_bb = losses_epoch_train['bbox_regression']
-        losses_val_bb.append(loss_bb)
-
-        loss_class = losses_epoch_train['classification']
-        losses_val_class.append(loss_class)
-
-        loss_sum = losses_epoch_train['sum']
-        losses_val_sum.append(loss_sum)
-        '''
-        time_end = timer()
-
-        lr = optimizer.param_groups[0]['lr']
-
-        print(f'Epoch: {epoch} '
-              f' Lr: {lr:.8f} '
-              f' Losses Train: Sum = [{loss_sum:.4f}] Class = [{loss_class:.4f}] Boxes = [{loss_bb:.4f}]'
-              f' Time one epoch (s): {(time_end - time_start):.4f} ')
-
-        # Plot to tensorboard
-        writer.add_scalar('Hyperparameters/Learning Rate', lr, epoch)
-        writer.add_scalar('Metrics/Losses/Sum', loss_sum, epoch)
-        writer.add_scalar('Metrics/Losses/Boxes', loss_bb, epoch)
-        writer.add_scalar('Metrics/Losses/Classification', loss_class, epoch)
-        writer.flush()
-
-        if lr_scheduler:
-            lr_scheduler.step()
-
-    loop_end = time()
-    time_loop = loop_end - loop_start
-    if verbose:
-        print(f'Time for {epochs} epochs (s): {(time_loop):.3f}')
-
-    return {'bbox_regression': losses_val_bb,
-            'classification': losses_val_class,
-            'sum': losses_val_sum,
-            'time': time_loop}
-"""
