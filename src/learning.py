@@ -12,6 +12,7 @@ import datetime
 from collections import defaultdict, deque
 
 import torch
+import numpy as np
 
 import utils
 
@@ -167,6 +168,66 @@ class MetricLogger(object):
         )
 
 
+class TableEvaluator:
+
+    def __init__(self, min_thresh=0.5, max_thresh=0.90, thresh_step=0.05):
+        self.reset()
+        self.min_thresh = min_thresh
+        self.max_thresh = max_thresh
+        self.thresh_step = thresh_step
+
+    def reset(self):
+        self.results = []
+        self.num_detections = 0
+        self.num_ground_truths = 0
+
+    def update(self, result):
+        assert isinstance(result, list)
+        assert isinstance(result[0], tuple)
+        self.results.extend(result)
+        for output, target in result:
+            self.num_detections += len(output["boxes"])
+            self.num_ground_truths += len(target["boxes"])
+
+    def evaluate(self):
+        # One dictionary for each IoU step
+        metrics = dict()
+
+        # For each IoU step
+        thresh_range = np.arange(
+            self.min_thresh, self.max_thresh + self.thresh_step, self.thresh_step
+        )
+        for thresh in thresh_range:
+
+            # Compute actual IoUs @ IoU
+            ious = []
+            for output, target in self.results:
+                keep = [
+                    i for i, s in enumerate(output["scores"])
+                    if s >= thresh
+                ]
+                for box in output["boxes"][keep]:
+                    best_match = utils.most_overlapping_box(
+                        box, target["boxes"], 0.5
+                    )
+                    if best_match is not None:
+                        _, _, actual_iou = best_match
+                        ious.append(actual_iou)
+
+            # Compute metrics @ IoU
+            mean_iou = np.mean(ious)
+            num_tps = len(ious)
+            precision = num_tps / self.num_detections
+            recall = num_tps / self.num_ground_truths
+            f1 = (2 * precision * recall) / (precision + recall)
+            metrics[thresh] = {
+                'iou': mean_iou, 'tp': num_tps,
+                'precision': precision, 'recall': recall, 'f1': f1
+            }
+
+        return metrics
+
+
 def collate_fn(batch):
     '''
     Flatten the given batch, which is a list of lists like the following
@@ -252,8 +313,8 @@ def training_loop(params, model, optimizer, train_dataloader,
             lr_scheduler.step()
 
         # Save checkpoints once in a while
-        if (params.learning.checkpoints.save and
-                epoch % params.learning.checkpoints.frequency == 0):
+        if (params.training.checkpoints.save and
+                epoch % params.training.checkpoints.frequency == 0):
             state_dict = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -264,13 +325,13 @@ def training_loop(params, model, optimizer, train_dataloader,
             torch.save(
                 state_dict,
                 os.path.join(
-                    params.learning.checkpoints.path,
+                    params.training.checkpoints.path,
                     f'{utils.now()}_{epoch}.pth'
                 )
             )
 
         # Evaluate after every epoch
-        evaluate(model, val_dataloader)
+        evaluate(params, model, val_dataloader)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -278,41 +339,44 @@ def training_loop(params, model, optimizer, train_dataloader,
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, device, log_interval):
+def evaluate(params, model, dataloader):
+    # Put the model in evaluation mode
     model.eval()
-    metric_logger = MetricLogger(delimiter="  ")
-    header = 'Test:'
 
-    coco = get_coco_api_from_dataset(dataloader.dataset)
-    iou_types = _get_iou_types(model)
-    coco_evaluator = CocoEvaluator(coco, iou_types)
+    # Create an instance of the metric logger
+    metric_logger = MetricLogger(delimiter=" ")
+    dataloader_wrapper = metric_logger.log_every(
+        dataloader, params.training.log_interval, header=f'Test:'
+    )
 
-    for images, targets in metric_logger.log_every(dataloader, log_interval, header):
-        images = list(img.to(device) for img in images)
+    # Create an instance of the table evaluator
+    table_evaluator = TableEvaluator()
 
-        torch.cuda.synchronize()
+    # For each batch of (images, targets) pairs
+    for images, targets in dataloader_wrapper:
+
+        # Transfer to device
+        images = list(image.to(params.generic.device) for image in images)
+
+        # Get model outputs
         model_time = time.time()
         outputs = model(images)
-
-        outputs = [{k: v.to(device) for k, v in t.items()}
-                   for t in outputs]
         model_time = time.time() - model_time
 
-        res = {target["image_id"].item(): output for target,
-               output in zip(targets, outputs)}
-        evaluator_time = time.time()
-        coco_evaluator.update(res)
-        evaluator_time = time.time() - evaluator_time
-        metric_logger.update(model_time=model_time,
-                             evaluator_time=evaluator_time)
+        # Accumulate outputs in the evaluator
+        table_evaluator.update(list(zip(outputs, targets)))
 
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
+        # Update time metrics
+        metric_logger.update(model_time=model_time)
+
+    # Compute evaluation metrics
+    evaluator_time = time.time()
+    metrics = table_evaluator.evaluate()
+    print(metrics)
+    evaluator_time = time.time() - evaluator_time
+
+    # Update time metrics
+    metric_logger.update(evaluator_time=evaluator_time)
+
+    # Print evaluation info
     print("Averaged stats:", metric_logger)
-    coco_evaluator.synchronize_between_processes()
-
-    # accumulate predictions from all images
-    coco_evaluator.accumulate()
-    coco_evaluator.summarize()
-    torch.set_num_threads(n_threads)
-    return coco_evaluator
