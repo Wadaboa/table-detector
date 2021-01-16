@@ -189,6 +189,9 @@ class TableEvaluator:
             self.num_detections += len(output["boxes"])
             self.num_ground_truths += len(target["boxes"])
 
+    def can_evaluate(self):
+        return self.num_detections > 0 and self.num_ground_truths > 0
+
     def evaluate(self):
         # One dictionary for each IoU step
         metrics = dict()
@@ -231,8 +234,7 @@ class TableEvaluator:
 def collate_fn(batch):
     '''
     Flatten the given batch, which is a list of lists like the following
-    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...],
-       [(img_2_1, targets_2_1), ...], ...]
+    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...], [(img_2_1, targets_2_1), ...], ...]
 
     to be a single list of tuples like the following
     [(img_1_1, targets_1_1), (img_1_2, targets_1_2), ..., (img_2_1, targets_2_1), ...]
@@ -371,8 +373,9 @@ def evaluate(params, model, dataloader):
 
     # Compute evaluation metrics
     evaluator_time = time.time()
-    metrics = table_evaluator.evaluate()
-    print(metrics)
+    if table_evaluator.can_evaluate():
+        metrics = table_evaluator.evaluate()
+        print(metrics)
     evaluator_time = time.time() - evaluator_time
 
     # Update time metrics
