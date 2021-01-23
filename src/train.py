@@ -61,7 +61,7 @@ def train(params):
     train_sampler = torch.utils.data.RandomSampler(train_dataset)
     test_sampler = torch.utils.data.SequentialSampler(test_dataset)
     train_batch_sampler = torch.utils.data.BatchSampler(
-        train_sampler, params.training.batch_size, drop_last=True
+        train_sampler, params.training.batch_size, drop_last=False
     )
 
     # Define data loaders

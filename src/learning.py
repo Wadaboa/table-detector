@@ -9,7 +9,7 @@ import sys
 import os
 import time
 import datetime
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 
 import torch
 import numpy as np
@@ -169,72 +169,171 @@ class MetricLogger(object):
 
 
 class TableEvaluator:
+    '''
+    Class that should be used to evaluate predictions
+    made by a table detector
+    '''
 
-    def __init__(self, min_thresh=0.5, max_thresh=0.90, thresh_step=0.05):
+    def __init__(self, iou_thresh=0.2, min_thresh=0.5, max_thresh=0.90, thresh_step=0.05):
         self.reset()
+        self.iou_thresh = iou_thresh
         self.min_thresh = min_thresh
         self.max_thresh = max_thresh
         self.thresh_step = thresh_step
 
     def reset(self):
+        '''
+        Reset detections and targets
+        '''
         self.results = []
         self.num_detections = 0
         self.num_ground_truths = 0
 
     def update(self, result):
+        '''
+        Update the current results with a list containing
+        one (output, target) pair for each evaluated image
+        '''
         assert isinstance(result, list)
         assert isinstance(result[0], tuple)
-        self.results.extend(result)
         for output, target in result:
+            self.results.append((output, target))
             self.num_detections += len(output["boxes"])
             self.num_ground_truths += len(target["boxes"])
 
     def can_evaluate(self):
+        '''
+        Return True if and only if there are some detections
+        and targets to evaluate the predictions
+        '''
         return self.num_detections > 0 and self.num_ground_truths > 0
 
-    def evaluate(self):
-        # One dictionary for each IoU step
-        metrics = dict()
+    def average_precision(self, metrics):
+        '''
+        Compute the average precision score as the sum of
+        precisions, weighted by the difference of the current
+        and previous recalls
+        '''
+        print(metrics)
+        thresholds = sorted(list(metrics.keys()), reverse=True)
+        recalls = (
+            [0] + [metrics[thresh]["recall"] for thresh in thresholds]
+        )
+        recall_diffs = np.array(recalls[1:]) - np.array(recalls[:-1])
+        precisions = np.array(
+            [metrics[thresh]["precision"] for thresh in thresholds]
+        )
+        return np.dot(precisions, recall_diffs)
 
-        # For each IoU step
+    def average_scores(self, metrics):
+        '''
+        Return the average of iou, precision, recall and f1
+        at different detection confidence thresholds
+        '''
+        iou, precision, recall, f1 = [], [], [], []
+        for thresh in metrics:
+            iou.append(metrics[thresh]["iou"])
+            precision.append(metrics[thresh]["precision"])
+            recall.append(metrics[thresh]["recall"])
+            f1.append(metrics[thresh]["f1"])
+        return {
+            "iou": np.mean(iou),
+            "precision": np.mean(precision),
+            "recall": np.mean(recall),
+            "f1": np.mean(f1)
+        }
+
+    def get_scores_dict(self):
+        '''
+        Return the dictionary of scores with all
+        metrics initialized to zero
+        '''
+        return {
+            "iou": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "ap": 0.0
+        }
+
+    def evaluate_one_image(self, predictions, targets):
+        num_dets, num_gts = len(predictions["boxes"]), len(targets["boxes"])
+        already_detected = [False] * num_gts
+        num_tps, num_fps = 0, 0
+        if num_gts > 0:
+            for box in predictions["boxes"]:
+                best_match = utils.most_overlapping_box(
+                    box, targets["boxes"], self.iou_thresh
+                )
+                if best_match is not None:
+                    target_index, _, _ = best_match
+                    if not already_detected[target_index]:
+                        num_tps += 1
+                else:
+                    num_fps += 1
+        return num_dets, num_gts, num_tps, num_fps
+
+    def evaluate(self):
+        '''
+        For each confidence threshold step, compute metrics such as
+        precision, recall and f1 and at the end aggregate all the metrics
+        into single numbers
+        '''
+        # If no detections or no targets, return
+        # all zero metrics
+        if not self.can_evaluate():
+            return self.get_scores_dict()
+
+        # One dictionary for each threshold step
+        metrics = OrderedDict()
+
+        # For each threshold step
         thresh_range = np.arange(
             self.min_thresh, self.max_thresh + self.thresh_step, self.thresh_step
         )
         for thresh in thresh_range:
 
-            # Compute actual IoUs @ IoU
+            # Compute actual IoUs at the selected
+            # confidence threshold
             ious = []
             for output, target in self.results:
+                # Keep only predictions that achieved a score
+                # greater than the current threshold
                 keep = [
                     i for i, s in enumerate(output["scores"])
                     if s >= thresh
                 ]
-                for box in output["boxes"][keep]:
-                    best_match = utils.most_overlapping_box(
-                        box, target["boxes"], 0.5
-                    )
-                    if best_match is not None:
-                        _, _, actual_iou = best_match
-                        ious.append(actual_iou)
+                num_dets, num_gts, num_tps, num_fps = self.evaluate_one_image(
+                    output["boxes"][keep].cpu().numpy(),
+                    target["boxes"].cpu().numpy()
+                )
 
-            # Compute metrics @ IoU
-            mean_iou = np.mean(ious)
-            num_tps = len(ious)
-            precision = num_tps / self.num_detections
-            recall = num_tps / self.num_ground_truths
-            f1 = (2 * precision * recall) / (precision + recall)
+            # Compute metrics at current threshold
             metrics[thresh] = {
-                'iou': mean_iou, 'tp': num_tps,
-                'precision': precision, 'recall': recall, 'f1': f1
+                'iou': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0
             }
+            if len(ious) > 0:
+                num_tps = len(ious)
+                mean_iou = np.mean(ious)
+                precision = num_tps / self.num_detections
+                recall = num_tps / self.num_ground_truths
+                f1 = (2 * precision * recall) / (precision + recall)
+                metrics[thresh] = {
+                    'iou': mean_iou, 'precision': precision,
+                    'recall': recall, 'f1': f1
+                }
 
-        return metrics
+        # Aggregate metrics computed at different thresholds
+        aggregated_metrics = self.average_scores(metrics)
+        aggregated_metrics["ap"] = self.average_precision(metrics)
+        return aggregated_metrics
 
 
 def collate_fn(batch):
     '''
     Flatten the given batch, which is a list of lists like the following
-    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...], [(img_2_1, targets_2_1), ...], ...]
+    [[(img_1_1, targets_1_1), (img_1_2, targets_1_2), ...],
+       [(img_2_1, targets_2_1), ...], ...]
 
     to be a single list of tuples like the following
     [(img_1_1, targets_1_1), (img_1_2, targets_1_2), ..., (img_2_1, targets_2_1), ...]
@@ -320,7 +419,10 @@ def training_loop(params, model, optimizer, train_dataloader,
             state_dict = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
-                'lr_scheduler': lr_scheduler.state_dict(),
+                'lr_scheduler': (
+                    lr_scheduler.state_dict()
+                    if lr_scheduler is not None else dict()
+                ),
                 'params': params,
                 'epoch': epoch
             }
@@ -373,9 +475,8 @@ def evaluate(params, model, dataloader):
 
     # Compute evaluation metrics
     evaluator_time = time.time()
-    if table_evaluator.can_evaluate():
-        metrics = table_evaluator.evaluate()
-        print(metrics)
+    metrics = table_evaluator.evaluate()
+    metric_logger.update(**metrics)
     evaluator_time = time.time() - evaluator_time
 
     # Update time metrics
