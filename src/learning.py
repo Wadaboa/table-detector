@@ -9,7 +9,7 @@ import sys
 import os
 import time
 import datetime
-from collections import defaultdict, deque, OrderedDict
+from collections import defaultdict, deque
 
 import torch
 import numpy as np
@@ -80,7 +80,7 @@ class MetricLogger(object):
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
-            if isinstance(v, torch.Tensor):
+            if isinstance(v, torch.Tensor) or isinstance(v, np.generic):
                 v = v.item()
             assert isinstance(v, (float, int))
             self.meters[k].update(v)
@@ -90,8 +90,9 @@ class MetricLogger(object):
             return self.meters[attr]
         if attr in self.__dict__:
             return self.__dict__[attr]
-        raise AttributeError("'{}' object has no attribute '{}'".format(
-            type(self).__name__, attr))
+        raise AttributeError(
+            "'{type(self).__name__}' object has no attribute '{attr}'"
+        )
 
     def __str__(self):
         loss_str = []
@@ -174,20 +175,16 @@ class TableEvaluator:
     made by a table detector
     '''
 
-    def __init__(self, iou_thresh=0.2, min_thresh=0.5, max_thresh=0.90, thresh_step=0.05):
+    def __init__(self, iou_thresh=0.2, conf_thresh=0.1):
         self.reset()
         self.iou_thresh = iou_thresh
-        self.min_thresh = min_thresh
-        self.max_thresh = max_thresh
-        self.thresh_step = thresh_step
+        self.conf_thresh = conf_thresh
 
     def reset(self):
         '''
         Reset detections and targets
         '''
         self.results = []
-        self.num_detections = 0
-        self.num_ground_truths = 0
 
     def update(self, result):
         '''
@@ -196,137 +193,141 @@ class TableEvaluator:
         '''
         assert isinstance(result, list)
         assert isinstance(result[0], tuple)
-        for output, target in result:
-            self.results.append((output, target))
-            self.num_detections += len(output["boxes"])
-            self.num_ground_truths += len(target["boxes"])
+        self.results.extend(result)
 
-    def can_evaluate(self):
-        '''
-        Return True if and only if there are some detections
-        and targets to evaluate the predictions
-        '''
-        return self.num_detections > 0 and self.num_ground_truths > 0
-
-    def average_precision(self, metrics):
+    def average_precision(self, precisions, recalls):
         '''
         Compute the average precision score as the sum of
         precisions, weighted by the difference of the current
         and previous recalls
-        '''
-        print(metrics)
-        thresholds = sorted(list(metrics.keys()), reverse=True)
-        recalls = (
-            [0] + [metrics[thresh]["recall"] for thresh in thresholds]
-        )
-        recall_diffs = np.array(recalls[1:]) - np.array(recalls[:-1])
-        precisions = np.array(
-            [metrics[thresh]["precision"] for thresh in thresholds]
-        )
-        return np.dot(precisions, recall_diffs)
 
-    def average_scores(self, metrics):
+        See https://github.com/rafaelpadilla/Object-Detection-Metrics
         '''
-        Return the average of iou, precision, recall and f1
-        at different detection confidence thresholds
-        '''
-        iou, precision, recall, f1 = [], [], [], []
-        for thresh in metrics:
-            iou.append(metrics[thresh]["iou"])
-            precision.append(metrics[thresh]["precision"])
-            recall.append(metrics[thresh]["recall"])
-            f1.append(metrics[thresh]["f1"])
-        return {
-            "iou": np.mean(iou),
-            "precision": np.mean(precision),
-            "recall": np.mean(recall),
-            "f1": np.mean(f1)
-        }
+        # Append sentinel values to beginning and end
+        prec = [0] + precisions + [0]
+        rec = [0] + recalls + [1]
 
-    def get_scores_dict(self):
+        # Maximum precision values
+        for i in range(len(prec) - 1, 0, -1):
+            prec[i - 1] = max(prec[i - 1], prec[i])
+
+        # Get recall indexes
+        indexes = []
+        for i in range(len(rec) - 1):
+            if rec[1:][i] != rec[0:-1][i]:
+                indexes.append(i + 1)
+
+        # Compute all-points average precision
+        ap = 0
+        for i in indexes:
+            ap = ap + np.sum((rec[i] - rec[i - 1]) * prec[i])
+
+        return ap
+
+    def get_default_scores(self):
         '''
         Return the dictionary of scores with all
         metrics initialized to zero
         '''
         return {
-            "iou": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "ap": 0.0
+            f'tps@iou={self.iou_thresh}': 0,
+            f'fps@iou={self.iou_thresh}': 0,
+            'gts': 0,
+            f'ap@iou={self.iou_thresh}': 0.0,
+            'mean_iou': 0.0,
+            f'precision@conf={self.conf_thresh}': 0.0,
+            f'recall@conf={self.conf_thresh}': 0.0,
+            f'f1@conf={self.conf_thresh}': 0.0
         }
-
-    def evaluate_one_image(self, predictions, targets):
-        num_dets, num_gts = len(predictions["boxes"]), len(targets["boxes"])
-        already_detected = [False] * num_gts
-        num_tps, num_fps = 0, 0
-        if num_gts > 0:
-            for box in predictions["boxes"]:
-                best_match = utils.most_overlapping_box(
-                    box, targets["boxes"], self.iou_thresh
-                )
-                if best_match is not None:
-                    target_index, _, _ = best_match
-                    if not already_detected[target_index]:
-                        num_tps += 1
-                else:
-                    num_fps += 1
-        return num_dets, num_gts, num_tps, num_fps
 
     def evaluate(self):
         '''
-        For each confidence threshold step, compute metrics such as
-        precision, recall and f1 and at the end aggregate all the metrics
-        into single numbers
+        Compute metrics such as average precision and
+        precision, recall, f1
         '''
-        # If no detections or no targets, return
-        # all zero metrics
-        if not self.can_evaluate():
-            return self.get_scores_dict()
+        num_gts, num_dets = 0, 0
+        whole_confs, whole_dets, whole_tps, whole_ious = [], [], [], []
 
-        # One dictionary for each threshold step
-        metrics = OrderedDict()
+        # For each processed image
+        for i, (output, target) in enumerate(self.results):
 
-        # For each threshold step
-        thresh_range = np.arange(
-            self.min_thresh, self.max_thresh + self.thresh_step, self.thresh_step
-        )
-        for thresh in thresh_range:
+            # Initialize ground-truth related stuff
+            gts = len(target["boxes"])
+            already_detected = np.full(gts, False)
+            num_gts += gts
 
-            # Compute actual IoUs at the selected
-            # confidence threshold
-            ious = []
-            for output, target in self.results:
-                # Keep only predictions that achieved a score
-                # greater than the current threshold
-                keep = [
-                    i for i, s in enumerate(output["scores"])
-                    if s >= thresh
-                ]
-                num_dets, num_gts, num_tps, num_fps = self.evaluate_one_image(
-                    output["boxes"][keep].cpu().numpy(),
-                    target["boxes"].cpu().numpy()
+            # Initialize detection related stuff
+            dets = (output["labels"] != 0)
+            confs = np.full(sum(dets), 0.0)
+            tps = np.full(sum(dets), False)
+            num_dets += sum(dets)
+
+            # For each output, find the ground truth with which
+            # it overlaps the most and keep it if IoU is greater
+            # than a fixed threshold
+            for box, score in zip(output["boxes"], output["scores"]):
+                best_match = utils.most_overlapping_box(
+                    box, target["boxes"], self.iou_thresh
                 )
+                if best_match is not None:
+                    target_index, _, iou = best_match
 
-            # Compute metrics at current threshold
-            metrics[thresh] = {
-                'iou': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0
-            }
-            if len(ious) > 0:
-                num_tps = len(ious)
-                mean_iou = np.mean(ious)
-                precision = num_tps / self.num_detections
-                recall = num_tps / self.num_ground_truths
-                f1 = (2 * precision * recall) / (precision + recall)
-                metrics[thresh] = {
-                    'iou': mean_iou, 'precision': precision,
-                    'recall': recall, 'f1': f1
-                }
+                    # If no background is detected (found a table)
+                    if dets[i]:
+                        whole_ious.append(iou)
+                        if not already_detected[target_index]:
+                            already_detected[target_index] = True
+                            confs[i], tps[i] = score, True
 
-        # Aggregate metrics computed at different thresholds
-        aggregated_metrics = self.average_scores(metrics)
-        aggregated_metrics["ap"] = self.average_precision(metrics)
-        return aggregated_metrics
+            # Store info
+            whole_confs.extend(confs)
+            whole_dets.extend(dets)
+            whole_tps.extend(tps)
+
+        # If no detections or no ground truths
+        if num_dets == 0 or num_gts == 0:
+            return self.get_default_scores()
+
+        # Convert lists to numpy
+        confs, dets, tps = (
+            np.array(whole_confs),
+            np.array(whole_dets),
+            np.array(whole_tps)
+        )
+
+        # Sort values by confidence scores
+        sorted_indices = np.argsort(-confs)
+        confs = confs[sorted_indices]
+        tps = tps[sorted_indices]
+        dets = dets[sorted_indices]
+
+        # Compute false positives and
+        # cumulative true and false positives
+        fps = np.invert(tps)
+        cum_tps = np.cumsum(tps)
+        cum_fps = np.cumsum(fps)
+
+        # Compute average precision score
+        precisions = cum_tps / (cum_tps + cum_fps)
+        recalls = cum_tps / (num_gts + 1e-16)
+        ap = self.average_precision(precisions, recalls)
+
+        # See https://github.com/ultralytics/yolov3/blob/master/utils/metrics.py
+        # for reference
+        p = np.interp(-self.conf_thresh, -confs[dets], precisions)
+        r = np.interp(-self.conf_thresh, -confs[dets], recalls)
+        f1 = (2 * p * r) / (p + r + 1e-16)
+
+        return {
+            f'tps@iou={self.iou_thresh}':  np.sum(tps),
+            f'fps@iou={self.iou_thresh}': np.sum(fps),
+            'gts': num_gts,
+            f'ap@iou={self.iou_thresh}': ap,
+            'mean_iou': np.mean(whole_ious),
+            f'precision@conf={self.conf_thresh}': p,
+            f'recall@conf={self.conf_thresh}': r,
+            f'f1@conf={self.conf_thresh}': f1
+        }
 
 
 def collate_fn(batch):
@@ -442,7 +443,7 @@ def training_loop(params, model, optimizer, train_dataloader,
     print(f'Training time {total_time_str}')
 
 
-@torch.no_grad()
+@ torch.no_grad()
 def evaluate(params, model, dataloader):
     # Put the model in evaluation mode
     model.eval()
