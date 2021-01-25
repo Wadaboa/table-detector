@@ -13,6 +13,7 @@ from collections import defaultdict, deque
 
 import torch
 import numpy as np
+import wandb
 
 import utils
 
@@ -74,9 +75,10 @@ class MetricLogger(object):
     Store different series of values, to log specific metrics during training
     '''
 
-    def __init__(self, delimiter="\t"):
-        self.meters = defaultdict(SmoothedValue)
+    def __init__(self, delimiter="\t", enable_wandb=False):
         self.delimiter = delimiter
+        self.enable_wandb = enable_wandb
+        self.meters = defaultdict(SmoothedValue)
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -91,7 +93,7 @@ class MetricLogger(object):
         if attr in self.__dict__:
             return self.__dict__[attr]
         raise AttributeError(
-            "'{type(self).__name__}' object has no attribute '{attr}'"
+            f"'{type(self).__name__}' object has no attribute '{attr}'"
         )
 
     def __str__(self):
@@ -105,10 +107,21 @@ class MetricLogger(object):
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def log_every(self, iterable, print_freq, header=None):
+    def wandb_log(self, prefix, time, keys=None):
+        logs = dict()
+        meters = dict(self.meters, **time)
+        keys = meters.keys() if keys is None else keys
+        for k in keys:
+            if k in meters:
+                v = meters[k]
+                logs[f'{prefix.lower()}/{k}'] = (
+                    v if not isinstance(v, SmoothedValue)
+                    else v.value
+                )
+        wandb.log(logs)
+
+    def log_every(self, iterable, print_freq, header='', prefix=''):
         i = 0
-        if not header:
-            header = ''
         start_time = time.time()
         end = time.time()
         iter_time = SmoothedValue(fmt='{avg:.4f}')
@@ -139,6 +152,11 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == len(iterable) - 1:
+                if self.enable_wandb:
+                    self.wandb_log(prefix, {
+                        'data_loading_time': data_time,
+                        'iteration_time': iter_time
+                    })
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
@@ -355,12 +373,14 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     model.train()
 
     # Create an instance of the metric logger
-    metric_logger = MetricLogger(delimiter=" ")
+    metric_logger = MetricLogger(
+        delimiter=" ", enable_wandb=params.generic.wandb.enabled
+    )
     metric_logger.add_meter(
         'lr', SmoothedValue(window_size=1, fmt='{value:.6f}')
     )
     dataloader_wrapper = metric_logger.log_every(
-        dataloader, params.training.log_interval, header=f'Epoch: [{epoch}]'
+        dataloader, params.training.log_interval, header=f'Epoch: [{epoch}]', prefix="train"
     )
 
     # For each batch of (images, targets) pairs
@@ -395,6 +415,30 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     return metric_logger
 
 
+def save_checkpoint(epoch, params, model, optimizer, lr_scheduler=None):
+    '''
+    Save the current state of the model, optimizer and learning rate scheduler,
+    both locally and on wandb (if available and enabled)
+    '''
+    state_dict = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'lr_scheduler': (
+            lr_scheduler.state_dict()
+            if lr_scheduler is not None else dict()
+        ),
+        'params': params,
+        'epoch': epoch
+    }
+    checkpoint_path = os.path.join(
+        params.training.checkpoints.path,
+        f'{utils.now()}_{epoch}.pth'
+    )
+    torch.save(state_dict, checkpoint_path)
+    if params.generic.wandb.enabled:
+        wandb.save(checkpoint_path)
+
+
 def training_loop(params, model, optimizer, train_dataloader,
                   val_dataloader, lr_scheduler=None):
     '''
@@ -417,26 +461,18 @@ def training_loop(params, model, optimizer, train_dataloader,
         # Save checkpoints once in a while
         if (params.training.checkpoints.save and
                 epoch % params.training.checkpoints.frequency == 0):
-            state_dict = {
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'lr_scheduler': (
-                    lr_scheduler.state_dict()
-                    if lr_scheduler is not None else dict()
-                ),
-                'params': params,
-                'epoch': epoch
-            }
-            torch.save(
-                state_dict,
-                os.path.join(
-                    params.training.checkpoints.path,
-                    f'{utils.now()}_{epoch}.pth'
-                )
+            save_checkpoint(
+                epoch, params, model, optimizer, lr_scheduler=lr_scheduler
             )
 
         # Evaluate after every epoch
         evaluate(params, model, val_dataloader)
+
+    # Always save the last checkpoint
+    save_checkpoint(
+        params.training.epochs, params, model,
+        optimizer, lr_scheduler=lr_scheduler
+    )
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -449,9 +485,11 @@ def evaluate(params, model, dataloader):
     model.eval()
 
     # Create an instance of the metric logger
-    metric_logger = MetricLogger(delimiter=" ")
+    metric_logger = MetricLogger(
+        delimiter=" ", enable_wandb=params.generic.wandb.enabled
+    )
     dataloader_wrapper = metric_logger.log_every(
-        dataloader, params.training.log_interval, header=f'Test:'
+        dataloader, params.training.log_interval, header=f'Test:', prefix="eval"
     )
 
     # Create an instance of the table evaluator
@@ -480,8 +518,10 @@ def evaluate(params, model, dataloader):
     metric_logger.update(**metrics)
     evaluator_time = time.time() - evaluator_time
 
-    # Update time metrics
+    # Update time metrics and evetually log metrics to wandb
     metric_logger.update(evaluator_time=evaluator_time)
+    if params.generic.wandb.enabled:
+        metric_logger.wandb_log("eval", {'evaluator_time': evaluator_time})
 
     # Print evaluation info
     print("Averaged stats:", metric_logger)

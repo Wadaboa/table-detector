@@ -133,3 +133,6 @@ dmypy.json
 
 # Models
 checkpoints/
+
+# Logs
+wandb/

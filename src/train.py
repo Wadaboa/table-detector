@@ -1,5 +1,5 @@
 import torch
-import torchvision
+import wandb
 import yaml
 
 import learning
@@ -80,6 +80,13 @@ def train(params):
     detector = detectors.get_detector(params, NUM_CLASSES)
     detector.to(params.generic.device)
 
+    # Watch the detector model with wandb (if enabled)
+    if params.generic.wandb.enabled:
+        wandb.watch(
+            detector, log=params.generic.wandb.watch,
+            log_freq=params.training.log_interval
+        )
+
     # Define the optimizer
     optimizer_type = params.optimizers.type
     optimizer = OPTIMIZERS[optimizer_type](
@@ -107,7 +114,15 @@ def main():
     with open('parameters.yml', 'r') as conf:
         args = yaml.load(conf, Loader=yaml.FullLoader)
     params = utils.Struct(**args)
+    if params.generic.wandb.enabled:
+        wandb.init(
+            project=params.generic.wandb.project,
+            entity=params.generic.wandb.entity,
+            config=args
+        )
     train(params)
+    if params.generic.wandb.enabled:
+        wandb.finish()
 
 
 if __name__ == "__main__":
