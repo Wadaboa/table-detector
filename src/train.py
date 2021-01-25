@@ -44,7 +44,22 @@ def get_dataset(params):
     train_dataset, test_dataset = torch.utils.data.random_split(
         dataset, [train_size, test_size]
     )
-    return train_dataset, test_dataset
+    return filter_dataset(train_dataset), filter_dataset(test_dataset)
+
+
+def filter_dataset(dataset):
+    '''
+    Keep only examples of the given dataset that have annotations
+    '''
+    keep = []
+    data, indices = dataset, list(range(len(dataset)))
+    if isinstance(dataset, torch.utils.data.Subset):
+        data = dataset.dataset
+        indices = dataset.indices
+    for i in range(len(dataset)):
+        if len(data.find_tables(indices[i])) > 0:
+            keep.append(indices[i])
+    return torch.utils.data.Subset(data, keep)
 
 
 def train(params):

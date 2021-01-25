@@ -12,6 +12,9 @@ import torch.nn.functional as F
 import PIL
 
 
+EXPLODE_WARNINGS = False
+
+
 class Struct:
     '''
     Struct class, s.t. a nested dictionary is transformed
@@ -442,4 +445,5 @@ def warn_with_traceback(message, category, filename, lineno, file=None, line=Non
     )
 
 
-warnings.showwarning = warn_with_traceback
+if EXPLODE_WARNINGS:
+    warnings.showwarning = warn_with_traceback
