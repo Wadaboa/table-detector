@@ -7,7 +7,7 @@ dataset:
   # Use a small slice of data to debug
   dummy:
     # Enable or disable
-    enabled: True
+    enabled: False
     # Number of examples to use
     size: 10
   # Marmot dataset configuration
@@ -15,9 +15,7 @@ dataset:
     # Path to Marmot examples
     path:
       - datasets/marmot/table_recognition/data/english/positive
-      #- datasets/marmot/table_recognition/data/english/negative
-      #- datasets/marmot/table_recognition/data/chinese/positive
-      #- datasets/marmot/table_recognition/data/chinese/negative
+      - datasets/marmot/table_recognition/data/chinese/positive
   # ICDAR13 dataset configuration
   icdar13:
     # Path to ICDAR13 examples
@@ -28,7 +26,7 @@ dataset:
 # Generic configuration
 generic:
   # Random seed for all the randomness sources
-  random_seed: 24
+  random_seed: 42
   # Number of data loading workers
   workers: 4
   # Where should data be processed
@@ -216,7 +214,7 @@ optimizers:
 
 # How to decay the learning rate during training
 lr_schedulers:
-  # Type of learning rate scheduler
+  # Type of learning rate scheduler ('none' means fixed)
   type: none
   # Step scheduler
   step:
