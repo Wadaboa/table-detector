@@ -10,6 +10,7 @@ import torch
 import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 import PIL
+from PIL import Image, ImageDraw, ImageFont
 
 
 EXPLODE_WARNINGS = False
@@ -412,6 +413,59 @@ def destandardize_image(img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.22
         std = std.view(-1, 1, 1)
     img.mul_(std).add_(mean)
     return img
+
+
+def get_device():
+    '''
+    Return a CUDA device, if available, or a standard CPU device otherwise
+    '''
+    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+def generate_colors(num_colors):
+    '''
+    Generates an array with RGB triplets representing colors
+    '''
+    return [
+        tuple(random.randint(0, 255) for _ in range(3))
+        for _ in range(num_colors)
+    ]
+
+
+@torch.no_grad()
+def draw_bounding_boxes(image, boxes, labels=None, colors=None, width=1, font=None, font_size=10):
+    '''
+    Draws bounding boxes on given image
+    (see https://github.com/pytorch/vision/blob/master/torchvision/utils.py)
+    '''
+    if not isinstance(image, torch.Tensor):
+        raise TypeError(f"Tensor expected, got {type(image)}")
+    elif image.dtype != torch.uint8:
+        raise ValueError(f"Tensor uint8 expected, got {image.dtype}")
+    elif image.dim() != 3:
+        raise ValueError("Pass individual images, not batches")
+
+    img_to_draw = Image.fromarray(to_numpy(image))
+    img_boxes = boxes.to(torch.int64).tolist()
+
+    draw = ImageDraw.Draw(img_to_draw)
+    txt_font = (
+        ImageFont.load_default() if font is None
+        else ImageFont.truetype(font=font, size=font_size)
+    )
+
+    if colors is None:
+        colors = generate_colors(len(img_boxes))
+
+    for i, bbox in enumerate(img_boxes):
+        draw.rectangle(bbox, width=width, outline=colors[i])
+
+        if labels is not None:
+            draw.text(
+                (bbox[0], bbox[1]), labels[i], fill=colors[i], font=txt_font
+            )
+
+    return to_tensor(img_to_draw)
 
 
 def flatten(a):

@@ -2,3 +2,4 @@
 torch==1.7.1
 torchvision==0.8.2
 ipykernel==5.4.3
+ipywidgets==7.6.3
