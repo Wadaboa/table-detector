@@ -161,6 +161,10 @@ class RCNN(nn.Module):
             detections_per_img=params.detector.box_detections_per_img
         )
 
+        # Transfer to device
+        self.device = params.generic.device
+        self.to(self.device)
+
     def forward(self, images, targets=None):
         '''
         1. Region proposals for each image
@@ -181,33 +185,39 @@ class RCNN(nn.Module):
             # Encode proposals coordinates as the entire proposal
             # and translate original targets into the proposal
             # reference frame
-            t_targets, t_proposals, t_indexes = [], [], []
-            for j in range(proposals_coords.shape[0]):
-                # Translate targets and re-compute associated info
-                t_target = copy.deepcopy(targets[i])
-                t_target["boxes"] = t_target["boxes"] - proposals_coords[j]
-                t_target["boxes"] = torchvision.ops.clip_boxes_to_image(
-                    t_target["boxes"],
-                    (proposals[j].shape[1], proposals[j].shape[2])
-                )
-                t_target["area"] = torchvision.ops.box_area(t_target["boxes"])
+            t_targets, t_proposals = [], []
+            t_indexes = list(range(proposals_coords.shape[0]))
+            if targets is not None:
+                t_indexes = []
+                for j in range(proposals_coords.shape[0]):
+                    # Translate targets and re-compute associated info
+                    t_target = copy.deepcopy(targets[i])
+                    t_target["boxes"] = t_target["boxes"] - proposals_coords[j]
+                    t_target["boxes"] = torchvision.ops.clip_boxes_to_image(
+                        t_target["boxes"],
+                        (proposals[j].shape[1], proposals[j].shape[2])
+                    )
+                    t_target["area"] = torchvision.ops.box_area(
+                        t_target["boxes"]
+                    )
 
-                # Keep only targets whose boxes have area > 0
-                # when translated into the proposal
-                keep = torch.where(t_target["area"] > 0)[0]
-                if keep.shape[0] != 0:
-                    # Store filtered targets, proposals and proposals coordinates
-                    t_targets.append({
-                        "boxes": t_target["boxes"][keep],
-                        "area": t_target["area"][keep],
-                        "labels": t_target["labels"][keep],
-                    })
-                    t_proposals.append(proposals[j])
-                    t_indexes.append(j)
+                    # Keep only targets whose boxes have area > 0
+                    # when translated into the proposal
+                    keep = torch.where(t_target["area"] > 0)[0]
+                    if keep.shape[0] != 0:
+                        # Store filtered targets, proposals and proposals coordinates
+                        t_targets.append({
+                            "boxes": t_target["boxes"][keep],
+                            "area": t_target["area"][keep],
+                            "labels": t_target["labels"][keep],
+                        })
+                        t_proposals.append(proposals[j])
+                        t_indexes.append(j)
 
             # Standardize and resize proposals and targets
             transformed_proposals, transformed_targets = self.transform(
-                t_proposals, t_targets
+                t_proposals if targets is not None else proposals,
+                t_targets if targets is not None else None
             )
 
             # Assign one proposal to each proposal image (the entire image)
@@ -227,11 +237,14 @@ class RCNN(nn.Module):
             # Repeat the feature map associated to each proposal
             # a number of time which is equal to the number of
             # targets that fit in the corresponding proposal
-            num_reps = torch.tensor(
-                [t["boxes"].shape[0] + 1 for t in transformed_targets]
-            )
-            for k in features:
-                features[k] = features[k].repeat_interleave(num_reps, dim=0)
+            if targets is not None:
+                num_reps = torch.tensor(
+                    [t["boxes"].shape[0] + 1 for t in transformed_targets]
+                )
+                for k in features:
+                    features[k] = features[k].repeat_interleave(
+                        num_reps, dim=0
+                    )
 
             # Compute classification scores and box regression values
             detections, detector_losses = self.roi_heads(
@@ -314,6 +327,10 @@ class FastRCNN(RCNN):
             nms_thresh=params.detector.box_nms_thresh,
             detections_per_img=params.detector.box_detections_per_img
         )
+
+        # Transfer to device
+        self.device = params.generic.device
+        self.to(self.device)
 
     def forward(self, images, targets=None):
         '''
@@ -415,6 +432,10 @@ class FasterRCNN(nn.Module):
             image_mean=params.backbone.imagenet_params.mean,
             image_std=params.backbone.imagenet_params.std,
         )
+
+        # Transfer to device
+        self.device = params.generic.device
+        self.to(self.device)
 
     def forward(self, images, targets=None):
         '''

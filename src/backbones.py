@@ -66,6 +66,10 @@ class Backbone(nn.Module):
         self.image_mean = params.backbone.imagenet_params.mean
         self.image_std = params.backbone.imagenet_params.std
 
+        # Transfer to device
+        self.device = params.generic.device
+        self.to(self.device)
+
     @classmethod
     def get_backbone(cls, backbone_type, pretrained=True):
         '''

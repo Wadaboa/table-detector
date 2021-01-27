@@ -29,11 +29,7 @@ def get_dataset(params):
     dataset_type = params.dataset.train
     dataset = DATASETS[dataset_type](
         roots=params.dataset.__dict__[dataset_type].path,
-        # transforms=torchvision.transforms.Compose([
-        #    transforms.Resize(
-        #        (params.input_size.height, params.input_size.width)
-        #    )
-        # ])
+        device=params.generic.device
     )
     dataset = filter_dataset(dataset)
     if params.dataset.dummy.enabled:
@@ -157,7 +153,6 @@ def train(params):
 
     # Get the object detector
     detector = detectors.get_detector(params, NUM_CLASSES)
-    detector.to(params.generic.device)
 
     # Watch the detector model with wandb (if enabled)
     wandb_watch(params, detector)

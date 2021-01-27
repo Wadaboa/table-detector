@@ -48,7 +48,7 @@ class MarmotTableRecognitionDataset(Dataset):
     BBOX_START = 'BBox="'
     BBOX_END = '" CLIDs'
 
-    def __init__(self, roots, transforms=None):
+    def __init__(self, roots, transforms=None, device="cpu"):
         if not isinstance(roots, list):
             roots = [roots]
         self.xml_files = []
@@ -63,7 +63,9 @@ class MarmotTableRecognitionDataset(Dataset):
                     root, "raw", f"{Path(xml_file).stem}.bmp"
                 )
                 self.image_files.append(image_file)
+
         self.transforms = transforms
+        self.device = device
         self.images = dict()
 
     def get_image(self, index):
@@ -170,28 +172,37 @@ class MarmotTableRecognitionDataset(Dataset):
 
     def __getitem__(self, index):
         img = self.get_image(index)
+        t_img = utils.to_tensor(img)
         boxes = self.find_tables(index)
-        t_boxes = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        t_boxes = torch.tensor(
+            boxes, dtype=torch.float32, device=self.device
+        ).reshape(-1, 4)
 
         # Compute masks from boxes
         masks = []
-        cv_img = utils.to_numpy(img)
         for box in boxes:
-            mask = utils.box_to_mask(cv_img, box)
+            mask = utils.box_to_mask(t_img, box)
             masks.append(mask)
 
         # Build the target dict
-        target = {}
-        target["boxes"] = t_boxes
-        target["labels"] = torch.ones((len(boxes),), dtype=torch.int64)
-        target["masks"] = torch.tensor(masks, dtype=torch.float32)
-        target["image_id"] = torch.tensor([index])
-        target["image_shape"] = torch.tensor(cv_img.shape, dtype=torch.int64)
-        target["area"] = (
-            torchvision.ops.box_area(target["boxes"]) if len(boxes) > 0
-            else torch.zeros((len(boxes),), dtype=torch.int64)
-        )
-        target["iscrowd"] = torch.zeros((len(boxes),), dtype=torch.int64)
+        target = {
+            "boxes": t_boxes,
+            "labels": torch.ones(
+                (len(boxes),), dtype=torch.int64, device=self.device
+            ),
+            "masks": masks,
+            "image_id": torch.tensor([index], device=self.device),
+            "image_shape": torch.tensor(
+                t_img.shape, dtype=torch.int64, device=self.device
+            ),
+            "area": (
+                torchvision.ops.box_area(t_boxes).to(self.device) if len(boxes) > 0
+                else torch.zeros((len(boxes),), dtype=torch.int64, device=self.device)
+            ),
+            "iscrowd": torch.zeros(
+                (len(boxes),), dtype=torch.int64, device=self.device
+            )
+        }
 
         # Apply the given transformations
         if self.transforms is not None:
@@ -199,7 +210,7 @@ class MarmotTableRecognitionDataset(Dataset):
             target = self.transforms(target)
 
         # Ensure that the image is a normalized PyTorch tensor
-        img = utils.normalize_image(utils.to_tensor(img))
+        img = utils.normalize_image(t_img)
         return [(img, target)]
 
     def __len__(self):
@@ -221,7 +232,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
         'x1', 'y1', 'x2', 'y2'
     )
 
-    def __init__(self, roots, transforms=None):
+    def __init__(self, roots, transforms=None, device="cpu"):
         if not isinstance(roots, list):
             roots = [roots]
         self.xml_files = []
@@ -238,6 +249,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 self.image_files.append(image_file)
 
         self.transforms = transforms
+        self.device = device
         self.images = dict()
 
     def get_images(self, index):
@@ -344,35 +356,36 @@ class ICDAR13TableRecognitionDataset(Dataset):
         res = []
         for page, boxes_in_page in boxes.items():
             img = imgs[page]
+            t_img = utils.to_tensor(img)
             t_boxes = torch.tensor(
-                boxes_in_page, dtype=torch.float32
+                boxes_in_page, dtype=torch.float32, device=self.device
             ).reshape(-1, 4)
 
             # Compute masks from boxes
             masks = []
-            cv_img = utils.to_numpy(img)
             for box in boxes_in_page:
-                mask = utils.box_to_mask(cv_img, box)
+                mask = utils.box_to_mask(t_img, box)
                 masks.append(mask)
 
             # Build the target dict
-            target = {}
-            target["boxes"] = t_boxes
-            target["labels"] = torch.ones(
-                (len(boxes_in_page),), dtype=torch.int64
-            )
-            target["masks"] = torch.tensor(masks, dtype=torch.float32)
-            target["image_id"] = torch.tensor([index])
-            target["image_shape"] = torch.tensor(
-                cv_img.shape, dtype=torch.int64
-            )
-            target["area"] = (
-                torchvision.ops.box_area(target["boxes"]) if len(boxes_in_page) > 0
-                else torch.zeros((len(boxes_in_page),), dtype=torch.int64)
-            )
-            target["iscrowd"] = torch.zeros(
-                (len(boxes_in_page),), dtype=torch.int64
-            )
+            target = {
+                "boxes": t_boxes,
+                "labels": torch.ones(
+                    (len(boxes_in_page),), dtype=torch.int64, device=self.device
+                ),
+                "masks": masks,
+                "image_id": torch.tensor([index], device=self.device),
+                "image_shape": torch.tensor(
+                    t_img.shape, dtype=torch.int64, device=self.device
+                ),
+                "area": (
+                    torchvision.ops.box_area(boxes_in_page).to(self.device) if len(boxes_in_page) > 0
+                    else torch.zeros((len(boxes_in_page),), dtype=torch.int64, device=self.device)
+                ),
+                "iscrowd": torch.zeros(
+                    (len(boxes_in_page),), dtype=torch.int64, device=self.device
+                )
+            }
 
             # Apply the given transformations
             if self.transforms is not None:
@@ -380,7 +393,7 @@ class ICDAR13TableRecognitionDataset(Dataset):
                 target = self.transforms(target)
 
             # Ensure that the image is a normalized PyTorch tensor
-            img = utils.normalize_image(utils.to_tensor(img))
+            img = utils.normalize_image(t_img)
             res.append((img, target))
 
         return res

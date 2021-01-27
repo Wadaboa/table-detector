@@ -29,7 +29,7 @@ class Resize(T.Resize):
     def forward(self, input):
         if isinstance(input, dict):
             input["boxes"] = resize_boxes(
-                input["boxes"], input["image_shape"][:-1], self.size
+                input["boxes"], input["image_shape"][1:], self.size
             )
             input["masks"] = super().forward(input["masks"])
             return input

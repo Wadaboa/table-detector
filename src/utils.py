@@ -153,9 +153,9 @@ def box_to_mask(img, box, mask_value=1):
     where the box is a list or tuple like (x1, y1, x2, y2)
     '''
     check_box_coords(box)
-    mask = np.zeros(img.shape, np.dtype('uint8'))
-    mask[box[1]:box[3], box[0]:box[2], :] = mask_value
-    return np.array(mask, dtype=np.float32)
+    mask = torch.zeros(img.shape, dtype=torch.uint8, device=img.device)
+    mask[:, box[1]:box[3], box[0]:box[2]] = mask_value
+    return mask
 
 
 def overlap_area(first_box, second_box):
@@ -466,6 +466,30 @@ def draw_bounding_boxes(image, boxes, labels=None, colors=None, width=1, font=No
             )
 
     return to_tensor(img_to_draw)
+
+
+def torch_to_cpu(input):
+    '''
+    Transfer the given input tensor or collection 
+    of tensors to CPU device
+    '''
+    if isinstance(input, torch.Tensor):
+        return input.detach().cpu()
+    elif isinstance(input, dict):
+        res = dict(input)
+        for k in input:
+            if isinstance(res[k], torch.Tensor):
+                res[k] = res[k].detach().cpu()
+        return res
+    elif isinstance(input, list):
+        res = list(input)
+        for i in range(len(res)):
+            if isinstance(res[i], torch.Tensor):
+                res[i] = res[i].detach().cpu()
+    else:
+        raise TypeError(
+            f"Input type {type(input)} not supported"
+        )
 
 
 def flatten(a):

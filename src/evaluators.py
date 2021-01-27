@@ -28,7 +28,11 @@ class Evaluator:
         '''
         assert isinstance(result, list)
         assert isinstance(result[0], tuple)
-        self.results.extend(result)
+        for output, target in result:
+            self.results.append((
+                utils.torch_to_cpu(output),
+                utils.torch_to_cpu(target)
+            ))
 
     @property
     def prefix(self):
@@ -293,7 +297,11 @@ class AggregatedEvaluator:
         '''
         assert isinstance(result, list)
         assert isinstance(result[0], tuple)
-        self.results.extend(result)
+        for output, target in result:
+            self.results.append((
+                utils.torch_to_cpu(output),
+                utils.torch_to_cpu(target)
+            ))
 
     def evaluate(self):
         '''

@@ -115,7 +115,7 @@ class RegionProposals():
     SelectiveSearch or EdgeBoxes instance
     '''
 
-    def __init__(self, rp_type, rp_params,
+    def __init__(self, rp_type, rp_params, device="cpu",
                  min_size=None, max_size=None, optim=True):
         # Select the right region proposals model
         if rp_type == 'selective_search':
@@ -143,6 +143,9 @@ class RegionProposals():
 
         # Set the optimized flag for OpenCV
         cv2.setUseOptimized(optim)
+
+        # PyTorch device type
+        self.device = device
 
     @classmethod
     def show_proposals(cls, img, proposals, max_proposals=50):
@@ -188,11 +191,12 @@ class RegionProposals():
 
         # Extract proposal and corresponding coordinates
         proposals = []
-        coords = torch.zeros((len(boxes), 4))
+        coords = torch.zeros((len(boxes), 4), device=self.device)
         for i, box in enumerate(boxes):
             # Convert from (x, y, w, h) to (x1, y1, x2, y2)
             box_coords = torch.tensor(
-                [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+                [box[0], box[1], box[0] + box[2], box[1] + box[3]],
+                device=self.device
             )
 
             # Extract proposal as-is
@@ -205,7 +209,7 @@ class RegionProposals():
                 )
 
             # Store proposals and corresponding coordinates
-            proposals.append(proposal)
+            proposals.append(proposal.to(self.device))
             coords[i] = box_coords
 
         return proposals, coords
@@ -217,9 +221,6 @@ class RegionProposals():
         where tuple `i` represents proposals `p` and corresponding
         coordinates `c` for input image `i`
         '''
-        if images.shape[0] == 1:
-            return self._forward(images[0], show=show)
-
         proposals, coords = [], []
         for i in range(images.shape[0]):
             p, c = self._forward(images[i], show=show)

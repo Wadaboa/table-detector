@@ -226,12 +226,6 @@ def train_one_epoch(params, model, optimizer, dataloader, epoch):
     # For each batch of (images, targets) pairs
     for images, targets in dataloader_wrapper:
 
-        # Transfer to device
-        images = list(image.to(params.generic.device) for image in images)
-        targets = [
-            {k: v.to(params.generic.device) for k, v in t.items()} for t in targets
-        ]
-
         # Aggregate losses
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
