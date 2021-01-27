@@ -1,5 +1,4 @@
 import torch
-from torch.utils import data
 import wandb
 import yaml
 
@@ -60,6 +59,88 @@ def filter_dataset(dataset):
     return torch.utils.data.Subset(dataset, keep)
 
 
+def get_train_dataloader(params, train_dataset):
+    '''
+    Given a train dataset, return the corresponding dataloader
+    '''
+    train_sampler = torch.utils.data.RandomSampler(train_dataset)
+    train_batch_sampler = torch.utils.data.BatchSampler(
+        train_sampler, params.training.batch_size, drop_last=False
+    )
+    return torch.utils.data.DataLoader(
+        train_dataset, batch_sampler=train_batch_sampler,
+        num_workers=params.generic.workers,
+        collate_fn=learning.collate_fn
+    )
+
+
+def get_test_dataloader(params, test_dataset):
+    '''
+    Given a test dataset, return the corresponding dataloader
+    '''
+    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+    return torch.utils.data.DataLoader(
+        test_dataset, batch_size=1, sampler=test_sampler,
+        num_workers=params.generic.workers,
+        collate_fn=learning.collate_fn
+    )
+
+
+def wandb_init(params, args):
+    '''
+    Start a wandb run (if enabled)
+    '''
+    if params.generic.wandb.enabled:
+        wandb.init(
+            project=params.generic.wandb.project,
+            entity=params.generic.wandb.entity,
+            config=args
+        )
+
+
+def wandb_watch(params, model):
+    '''
+    Watch the given model with wandb (if enabled)
+    '''
+    if params.generic.wandb.enabled:
+        wandb.watch(
+            model, log=params.generic.wandb.watch,
+            log_freq=params.training.log_interval
+        )
+
+
+def wandb_finish(params):
+    '''
+    End the current wandb run (if enabled)
+    '''
+    if params.generic.wandb.enabled:
+        wandb.finish()
+
+
+def get_optimizer(params, model):
+    '''
+    Return the optimizer defined in the parameters
+    '''
+    optimizer_type = params.optimizers.type
+    return OPTIMIZERS[optimizer_type](
+        [p for p in model.parameters() if p.requires_grad],
+        **params.optimizers.__dict__[optimizer_type].__dict__
+    )
+
+
+def get_lr_scheduler(params, optimizer):
+    '''
+    Return the learning rate scheduler defined in the parameters
+    '''
+    lr_scheduler_type = params.lr_schedulers.type
+    if lr_scheduler_type in LR_SCHEDULERS:
+        return LR_SCHEDULERS[lr_scheduler_type](
+            optimizer,
+            **params.lr_schedulers.__dict__[lr_scheduler_type].__dict__
+        )
+    return None
+
+
 def train(params):
     '''
     Train a model with the specified parameters
@@ -70,51 +151,22 @@ def train(params):
     # Define datasets
     train_dataset, test_dataset = get_dataset(params)
 
-    # Define samplers
-    train_sampler = torch.utils.data.RandomSampler(train_dataset)
-    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
-    train_batch_sampler = torch.utils.data.BatchSampler(
-        train_sampler, params.training.batch_size, drop_last=False
-    )
-
     # Define data loaders
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_sampler=train_batch_sampler,
-        num_workers=params.generic.workers,
-        collate_fn=learning.collate_fn
-    )
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=1, sampler=test_sampler,
-        num_workers=params.generic.workers,
-        collate_fn=learning.collate_fn
-    )
+    train_dataloader = get_train_dataloader(params, train_dataset)
+    test_dataloader = get_test_dataloader(params, test_dataset)
 
     # Get the object detector
     detector = detectors.get_detector(params, NUM_CLASSES)
     detector.to(params.generic.device)
 
     # Watch the detector model with wandb (if enabled)
-    if params.generic.wandb.enabled:
-        wandb.watch(
-            detector, log=params.generic.wandb.watch,
-            log_freq=params.training.log_interval
-        )
+    wandb_watch(params, detector)
 
     # Define the optimizer
-    optimizer_type = params.optimizers.type
-    optimizer = OPTIMIZERS[optimizer_type](
-        [p for p in detector.parameters() if p.requires_grad],
-        **params.optimizers.__dict__[optimizer_type].__dict__
-    )
+    optimizer = get_optimizer(params, detector)
 
     # Define the learning rate scheduler
-    lr_scheduler = None
-    lr_scheduler_type = params.lr_schedulers.type
-    if lr_scheduler_type in LR_SCHEDULERS:
-        lr_scheduler = LR_SCHEDULERS[lr_scheduler_type](
-            optimizer,
-            **params.lr_schedulers.__dict__[lr_scheduler_type].__dict__
-        )
+    lr_scheduler = get_lr_scheduler(params, optimizer)
 
     # Call the training/evaluation loop
     learning.training_loop(
@@ -127,15 +179,9 @@ def main():
     with open('parameters.yml', 'r') as conf:
         args = yaml.load(conf, Loader=yaml.FullLoader)
     params = utils.Struct(**args)
-    if params.generic.wandb.enabled:
-        wandb.init(
-            project=params.generic.wandb.project,
-            entity=params.generic.wandb.entity,
-            config=args
-        )
+    wandb_init(params, args)
     train(params)
-    if params.generic.wandb.enabled:
-        wandb.finish()
+    wandb_finish(params)
 
 
 if __name__ == "__main__":
