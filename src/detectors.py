@@ -181,6 +181,8 @@ class RCNN(nn.Module):
             proposals, proposals_coords = self.rp_model(
                 img.unsqueeze(0)
             )
+            proposals = proposals[0]
+            proposals_coords = proposals_coords[0]
 
             # Encode proposals coordinates as the entire proposal
             # and translate original targets into the proposal
@@ -270,17 +272,25 @@ class RCNN(nn.Module):
                 # Translate boxes back into the original image frame
                 t_res = defaultdict(list)
                 for res, ind in zip(proc_dets, t_indexes):
-                    t_res["labels"].append(res["labels"])
-                    t_res["scores"].append(res["scores"])
-                    for box in res["boxes"]:
-                        t_res["boxes"].append(box + proposals_coords[ind])
+                    if len(res["labels"]) > 0 and len(res["scores"]) > 0:
+                        t_res["labels"].append(res["labels"])
+                        t_res["scores"].append(res["scores"])
+                        for box in res["boxes"]:
+                            t_res["boxes"].append(box + proposals_coords[ind])
 
                 # One dictionary of results (containing tensors)
                 # for each original image
-                t_res["boxes"] = torch.cat(t_res["boxes"])
-                t_res["labels"] = torch.cat(t_res["labels"])
-                t_res["scores"] = torch.cat(t_res["scores"])
-                results.append(t_res)
+                if "boxes" not in t_res:
+                    results.append({
+                        "boxes": torch.tensor([], device=self.device),
+                        "labels": torch.tensor([], device=self.device),
+                        "scores": torch.tensor([], device=self.device)
+                    })
+                else:
+                    t_res["boxes"] = torch.stack(t_res["boxes"], dim=0)
+                    t_res["labels"] = torch.cat(t_res["labels"], dim=0)
+                    t_res["scores"] = torch.cat(t_res["scores"], dim=0)
+                    results.append(t_res)
 
         # Return detections when evaluating
         if not self.training:
