@@ -34,7 +34,7 @@ generic:
   # Weights and biases configurations
   wandb:
     # Enable or disable wandb
-    enabled: True
+    enabled: False
     # Wandb project to log to
     project: table-detector
     # Wandb account to log to

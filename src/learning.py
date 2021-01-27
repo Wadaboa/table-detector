@@ -16,6 +16,7 @@ import numpy as np
 import wandb
 
 import utils
+import evaluators
 
 
 class SmoothedValue():
@@ -187,167 +188,6 @@ class MetricLogger(object):
         )
 
 
-class TableEvaluator:
-    '''
-    Class that should be used to evaluate predictions
-    made by a table detector
-    '''
-
-    def __init__(self, iou_thresh=0.2, conf_thresh=0.1):
-        self.reset()
-        self.iou_thresh = iou_thresh
-        self.conf_thresh = conf_thresh
-
-    def reset(self):
-        '''
-        Reset detections and targets
-        '''
-        self.results = []
-
-    def update(self, result):
-        '''
-        Update the current results with a list containing
-        one (output, target) pair for each evaluated image
-        '''
-        assert isinstance(result, list)
-        assert isinstance(result[0], tuple)
-        self.results.extend(result)
-
-    def average_precision(self, precisions, recalls):
-        '''
-        Compute the average precision score as the sum of
-        precisions, weighted by the difference of the current
-        and previous recalls
-
-        See https://github.com/rafaelpadilla/Object-Detection-Metrics
-        '''
-        # Append sentinel values to beginning and end
-        prec = [0] + precisions + [0]
-        rec = [0] + recalls + [1]
-
-        # Maximum precision values
-        for i in range(len(prec) - 1, 0, -1):
-            prec[i - 1] = max(prec[i - 1], prec[i])
-
-        # Get recall indexes
-        indexes = []
-        for i in range(len(rec) - 1):
-            if rec[1:][i] != rec[0:-1][i]:
-                indexes.append(i + 1)
-
-        # Compute all-points average precision
-        ap = 0
-        for i in indexes:
-            ap = ap + np.sum((rec[i] - rec[i - 1]) * prec[i])
-
-        return ap
-
-    def get_default_scores(self):
-        '''
-        Return the dictionary of scores with all
-        metrics initialized to zero
-        '''
-        return {
-            f'tps@iou={self.iou_thresh}': 0,
-            f'fps@iou={self.iou_thresh}': 0,
-            'gts': 0,
-            f'ap@iou={self.iou_thresh}': 0.0,
-            'mean_iou': 0.0,
-            f'precision@conf={self.conf_thresh}': 0.0,
-            f'recall@conf={self.conf_thresh}': 0.0,
-            f'f1@conf={self.conf_thresh}': 0.0
-        }
-
-    def evaluate(self):
-        '''
-        Compute metrics such as average precision and
-        precision, recall, f1
-        '''
-        num_gts, num_dets = 0, 0
-        whole_confs, whole_dets, whole_tps, whole_ious = [], [], [], []
-
-        # For each processed image
-        for i, (output, target) in enumerate(self.results):
-
-            # Initialize ground-truth related stuff
-            gts = len(target["boxes"])
-            already_detected = np.full(gts, False)
-            num_gts += gts
-
-            # Initialize detection related stuff
-            dets = (output["labels"] != 0)
-            confs = np.full(sum(dets), 0.0)
-            tps = np.full(sum(dets), False)
-            num_dets += sum(dets)
-
-            # For each output, find the ground truth with which
-            # it overlaps the most and keep it if IoU is greater
-            # than a fixed threshold
-            for box, score in zip(output["boxes"], output["scores"]):
-                best_match = utils.most_overlapping_box(
-                    box, target["boxes"], self.iou_thresh
-                )
-                if best_match is not None:
-                    target_index, _, iou = best_match
-
-                    # If no background is detected (found a table)
-                    if dets[i]:
-                        whole_ious.append(iou)
-                        if not already_detected[target_index]:
-                            already_detected[target_index] = True
-                            confs[i], tps[i] = score, True
-
-            # Store info
-            whole_confs.extend(confs)
-            whole_dets.extend(dets)
-            whole_tps.extend(tps)
-
-        # If no detections or no ground truths
-        if num_dets == 0 or num_gts == 0:
-            return self.get_default_scores()
-
-        # Convert lists to numpy
-        confs, dets, tps = (
-            np.array(whole_confs),
-            np.array(whole_dets),
-            np.array(whole_tps)
-        )
-
-        # Sort values by confidence scores
-        sorted_indices = np.argsort(-confs)
-        confs = confs[sorted_indices]
-        tps = tps[sorted_indices]
-        dets = dets[sorted_indices]
-
-        # Compute false positives and
-        # cumulative true and false positives
-        fps = np.invert(tps)
-        cum_tps = np.cumsum(tps)
-        cum_fps = np.cumsum(fps)
-
-        # Compute average precision score
-        precisions = cum_tps / (cum_tps + cum_fps)
-        recalls = cum_tps / (num_gts + 1e-16)
-        ap = self.average_precision(precisions, recalls)
-
-        # See https://github.com/ultralytics/yolov3/blob/master/utils/metrics.py
-        # for reference
-        p = np.interp(-self.conf_thresh, -confs[dets], precisions)
-        r = np.interp(-self.conf_thresh, -confs[dets], recalls)
-        f1 = (2 * p * r) / (p + r + 1e-16)
-
-        return {
-            f'tps@iou={self.iou_thresh}':  np.sum(tps),
-            f'fps@iou={self.iou_thresh}': np.sum(fps),
-            'gts': num_gts,
-            f'ap@iou={self.iou_thresh}': ap,
-            'mean_iou': np.mean(whole_ious),
-            f'precision@conf={self.conf_thresh}': p,
-            f'recall@conf={self.conf_thresh}': r,
-            f'f1@conf={self.conf_thresh}': f1
-        }
-
-
 def collate_fn(batch):
     '''
     Flatten the given batch, which is a list of lists like the following
@@ -493,7 +333,9 @@ def evaluate(params, model, dataloader):
     )
 
     # Create an instance of the table evaluator
-    table_evaluator = TableEvaluator()
+    evaluator = evaluators.AggregatedEvaluator(
+        [evaluators.PascalEvaluator, evaluators.ICDAR19Evaluator]
+    )
 
     # For each batch of (images, targets) pairs
     for images, targets in dataloader_wrapper:
@@ -507,14 +349,14 @@ def evaluate(params, model, dataloader):
         model_time = time.time() - model_time
 
         # Accumulate outputs in the evaluator
-        table_evaluator.update(list(zip(outputs, targets)))
+        evaluator.update(list(zip(outputs, targets)))
 
         # Update time metrics
         metric_logger.update(model_time=model_time)
 
     # Compute evaluation metrics
     evaluator_time = time.time()
-    metrics = table_evaluator.evaluate()
+    metrics = evaluator.evaluate()
     metric_logger.update(**metrics)
     evaluator_time = time.time() - evaluator_time
 
